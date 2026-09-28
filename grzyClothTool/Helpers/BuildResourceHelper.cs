@@ -514,7 +514,7 @@ public class BuildResourceHelper
             }
             catch (Exception ex)
             {
-                LogHelper.Log($"Failed to delete existing dlc.rpf: {ex.Message}", LogType.Warning);
+                _reporter.Warning($"Failed to delete existing dlc.rpf: {ex.Message}");
             }
         }
 
@@ -864,6 +864,7 @@ public class BuildResourceHelper
     {
         var weight = GetTextureWeight(t, convertNonYtd ? BuildResourceType.FiveM : BuildResourceType.AltV);
         var fileName = Path.GetFileName(finalPath);
+        fileName = fileName[(fileName.LastIndexOf('^') + 1)..];
 
         try
         {
@@ -1458,7 +1459,7 @@ public class BuildResourceHelper
                         var optimizedBytes = await ImgHelper.Optimize(dds, embeddedDto.OptimizeDetails);
                         if (optimizedBytes == null)
                         {
-                            LogHelper.Log($"Skipping corrupted embedded texture: {embeddedDto.Details.Name} in drawable {dr.Name}", LogType.Warning);
+                            _reporter.Warning($"Skipping corrupted embedded texture: {embeddedDto.Details.Name} in drawable {dr.Name}");
                             continue;
                         }
                         newTexture = DDSIO.GetTexture(optimizedBytes);
@@ -1512,7 +1513,7 @@ public class BuildResourceHelper
 
                 if (originalTexturePair.Value == null)
                 {
-                    LogHelper.Log($"Original texture '{embeddedDto.OriginalName}' not found in TextureDictionary for drawable {dr.Name}. Skipping.", LogType.Warning);
+                    _reporter.Warning($"Original texture '{embeddedDto.OriginalName}' not found in TextureDictionary for drawable {dr.Name}. Skipping.");
                     continue;
                 }
 
@@ -1523,7 +1524,7 @@ public class BuildResourceHelper
                     var optimizedBytes = await ImgHelper.Optimize(dds, embeddedDto.OptimizeDetails);
                     if (optimizedBytes == null)
                     {
-                        LogHelper.Log($"Skipping corrupted embedded texture: {embeddedDto.Details.Name} in drawable {dr.Name}", LogType.Warning);
+                        _reporter.Warning($"Skipping corrupted embedded texture: {embeddedDto.Details.Name} in drawable {dr.Name}");
                         continue;
                     }
                     textureToUpdate = DDSIO.GetTexture(optimizedBytes);
@@ -1538,7 +1539,7 @@ public class BuildResourceHelper
                     var optimizedBytes = await ImgHelper.Optimize(dds, embeddedDto.OptimizeDetails);
                     if (optimizedBytes == null)
                     {
-                        LogHelper.Log($"Skipping corrupted embedded texture: {embeddedDto.Details.Name} in drawable {dr.Name}", LogType.Warning);
+                        _reporter.Warning($"Skipping corrupted embedded texture: {embeddedDto.Details.Name} in drawable {dr.Name}");
                         continue;
                     }
                     textureToUpdate = DDSIO.GetTexture(optimizedBytes);
@@ -1645,14 +1646,14 @@ public class BuildResourceHelper
             // only delete if the path explicitly ends with "build_output"
             if (!_baseBuildPath.EndsWith("build_output", StringComparison.OrdinalIgnoreCase))
             {
-                LogHelper.Log($"Skipping cleanup: Build path does not end with 'build_output'. Path: {_baseBuildPath}", LogType.Warning);
+                _reporter.Warning($"Skipping cleanup: Build path does not end with 'build_output'. Path: {_baseBuildPath}");
                 return;
             }
 
             // ensure the path is not a root directory
             if (Path.GetPathRoot(_baseBuildPath) == _baseBuildPath)
             {
-                LogHelper.Log($"Skipping cleanup: Cannot delete root directory. Path: {_baseBuildPath}", LogType.Warning);
+                _reporter.Warning($"Skipping cleanup: Cannot delete root directory. Path: {_baseBuildPath}");
                 return;
             }
 
@@ -1661,11 +1662,11 @@ public class BuildResourceHelper
                 try
                 {
                     Directory.Delete(_baseBuildPath, true);
-                    LogHelper.Log($"Deleted existing build output directory: {_baseBuildPath}", LogType.Info);
+                    _reporter.Info($"Deleted existing build output directory: {_baseBuildPath}");
                 }
                 catch (Exception ex)
                 {
-                    LogHelper.Log($"Failed to delete build output directory: {ex.Message}", LogType.Warning);
+                    _reporter.Warning($"Failed to delete build output directory: {ex.Message}");
                 }
             }
 
@@ -1673,7 +1674,7 @@ public class BuildResourceHelper
         }
         catch (Exception ex)
         {
-            LogHelper.Log($"Error during build output cleanup: {ex.Message}", LogType.Warning);
+            _reporter.Warning($"Error during build output cleanup: {ex.Message}");
         }
     }
     private void CleanupBuildTempDirectory()
@@ -1683,12 +1684,12 @@ public class BuildResourceHelper
             if (Directory.Exists(_buildTempFolderPath))
             {
                 Directory.Delete(_buildTempFolderPath, true);
-                LogHelper.Log($"Deleted build temp directory: {_buildTempFolderPath}", LogType.Info);
+                _reporter.Info($"Deleted build temp directory: {_buildTempFolderPath}");
             }
         }
         catch (Exception ex)
         {
-            LogHelper.Log($"Failed to clean up temp directory: {ex.Message}", LogType.Warning);
+            _reporter.Warning($"Failed to clean up temp directory: {ex.Message}");
         }
     }
 

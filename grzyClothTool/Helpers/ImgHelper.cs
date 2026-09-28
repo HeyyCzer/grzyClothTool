@@ -90,10 +90,9 @@ public static class ImgHelper
                 img.Settings.SetDefine(MagickFormat.Dds, "mipmaps", details.MipMapCount);
             }
 
-            var stream = new MemoryStream();
-            img.Write(stream);
-
-            var newDds = stream.ToArray();
+            // ToByteArray writes straight into one right-sized buffer; a growing MemoryStream plus
+            // ToArray allocated several large-object-heap arrays per texture and stalled parallel builds on GC.
+            var newDds = img.ToByteArray();
             var newTxt = CodeWalker.Utils.DDSIO.GetTexture(newDds);
             newTxt.Name = gtxt.DisplayName;
             ytd.TextureDict.BuildFromTextureList([newTxt]);
@@ -120,9 +119,7 @@ public static class ImgHelper
             img.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
             img.Settings.SetDefine(MagickFormat.Dds, "mipmaps", optimizeDetails.MipMapCount);
 
-            var stream = new MemoryStream();
-            img.Write(stream);
-            return stream.ToArray();
+            return img.ToByteArray();
         }
         catch (MagickCorruptImageErrorException)
         {

@@ -7,6 +7,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Windows;
@@ -399,6 +400,10 @@ namespace grzyClothTool.Views
             await SaveHelper.SaveAsync();
 
             var succeeded = false;
+            // Parallel texture processing allocates many large buffers; avoid blocking full GCs
+            // (which pause every worker) while the build runs.
+            var previousLatencyMode = GCSettings.LatencyMode;
+            GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
             try
             {
                 var timer = Stopwatch.StartNew();
@@ -421,6 +426,11 @@ namespace grzyClothTool.Views
             }
             finally
             {
+                GCSettings.LatencyMode = previousLatencyMode;
+                // Hand the freed texture buffers back to the OS once, like after loading a project.
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect();
+
                 _uiTimer.Stop();
                 RefreshBuildProgress(); // flush the last lines and the final state
 
