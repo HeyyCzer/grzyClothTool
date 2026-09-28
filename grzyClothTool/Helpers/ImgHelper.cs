@@ -1,5 +1,6 @@
 ﻿using CodeWalker.GameFiles;
 using grzyClothTool.Models.Texture;
+using grzyClothTool.Optimization;
 using ImageMagick;
 using System;
 using System.IO;
@@ -28,8 +29,7 @@ public static class ImgHelper
                 {
                     return null;
                 }
-                var txt = ytd.TextureDict.Textures[0];
-                return TryReadUncompressedPixels(txt) ?? new MagickImage(CodeWalker.Utils.DDSIO.GetDDSFile(txt));
+                return TextureCodec.Decode(ytd.TextureDict.Textures[0]);
             }
             else
             {
@@ -43,37 +43,7 @@ public static class ImgHelper
         }
     }
 
-    /// <summary>
-    /// Reads the top mip level of an uncompressed texture straight from its pixel data, skipping the
-    /// DDS container copy and DDS decoding. Returns null for formats/layouts that need the DDS path.
-    /// </summary>
-    private static MagickImage TryReadUncompressedPixels(Texture txt)
-    {
-        var mapping = txt.Format switch
-        {
-            TextureFormat.D3DFMT_A8R8G8B8 => "BGRA",
-            TextureFormat.D3DFMT_X8R8G8B8 => "BGRP", // P = padding byte, no alpha
-            TextureFormat.D3DFMT_A8B8G8R8 => "RGBA",
-            _ => null
-        };
-
-        var data = txt.Data?.FullData;
-        uint topLevelSize = (uint)txt.Width * txt.Height * 4;
-        if (mapping == null || txt.Stride != txt.Width * 4 || data == null || data.Length < topLevelSize)
-        {
-            return null;
-        }
-
-        var img = new MagickImage();
-        img.ReadPixels(data, 0, topLevelSize, new PixelReadSettings(txt.Width, txt.Height, StorageType.Char, mapping));
-        return img;
-    }
-
-    public static int GetCorrectMipMapAmount(int width, int height)
-    {
-        int size = Math.Min(width, height);
-        return (int)Math.Log(size, 2) - 1;
-    }
+    public static int GetCorrectMipMapAmount(int width, int height) => TextureRules.GetCorrectMipMapAmount(width, height);
 
     public static (int, int) CheckPowerOfTwo(int width, int height)
     {
@@ -105,18 +75,9 @@ public static class ImgHelper
             img.Format = MagickFormat.Dds;
 
             // Skip optimization (I think this is best way to not duplicate code, and reuse this for jpg/png textures that don't need optimization)
-            if (!shouldSkipOptimization)
-            {
-                var details = gtxt.OptimizeDetails;
-                ResizeExact(img, details.Width, details.Height, details.Compression);
-                img.Settings.SetDefine(MagickFormat.Dds, "compression", GetCompressionString(details.Compression));
-                img.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
-                img.Settings.SetDefine(MagickFormat.Dds, "mipmaps", details.MipMapCount);
-            }
-
-            // ToByteArray writes straight into one right-sized buffer; a growing MemoryStream plus
-            // ToArray allocated several large-object-heap arrays per texture and stalled parallel builds on GC.
-            var newDds = img.ToByteArray();
+            var newDds = shouldSkipOptimization
+                ? img.ToByteArray()
+                : TextureCodec.EncodeDds(img, ToTextureInfo(gtxt.OptimizeDetails));
             var newTxt = CodeWalker.Utils.DDSIO.GetTexture(newDds);
             newTxt.Name = gtxt.DisplayName;
             ytd.TextureDict.BuildFromTextureList([newTxt]);
@@ -136,14 +97,7 @@ public static class ImgHelper
         try
         {
             using var img = new MagickImage(imgBytes);
-            img.Format = MagickFormat.Dds;
-
-            ResizeExact(img, optimizeDetails.Width, optimizeDetails.Height, optimizeDetails.Compression);
-            img.Settings.SetDefine(MagickFormat.Dds, "compression", GetCompressionString(optimizeDetails.Compression));
-            img.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
-            img.Settings.SetDefine(MagickFormat.Dds, "mipmaps", optimizeDetails.MipMapCount);
-
-            return img.ToByteArray();
+            return TextureCodec.EncodeDds(img, ToTextureInfo(optimizeDetails));
         }
         catch (MagickCorruptImageErrorException)
         {
@@ -217,36 +171,6 @@ public static class ImgHelper
         throw new NotSupportedException($"Unsupported file extension: {gtxt.Extension}");
     }
 
-    private static string GetCompressionString(string cwCompression)
-    {
-        return cwCompression switch
-        {
-            "D3DFMT_DXT1" => "dxt1",
-            "D3DFMT_DXT3" => "dxt3",
-            "D3DFMT_DXT5" => "dxt5",
-            "D3DFMT_A8R8G8B8" => "none",
-            _ => "dxt5",
-        };
-    }
-
-    private static bool IsBlockCompressed(string cwCompression) => cwCompression switch
-    {
-        "D3DFMT_DXT1" or "D3DFMT_DXT3" or "D3DFMT_DXT5"
-        or "D3DFMT_ATI1" or "D3DFMT_ATI2" or "D3DFMT_BC7" => true,
-        _ => false,
-    };
-
-    private static int RoundDownToMultipleOf4(int value) => Math.Max(4, value - (value % 4));
-
-    private static void ResizeExact(MagickImage img, int width, int height, string cwCompression)
-    {
-        if (IsBlockCompressed(cwCompression))
-        {
-            width = RoundDownToMultipleOf4(width);
-            height = RoundDownToMultipleOf4(height);
-        }
-
-        var geometry = new MagickGeometry((uint)width, (uint)height) { IgnoreAspectRatio = true };
-        img.Resize(geometry);
-    }
+    private static TextureInfo ToTextureInfo(GTextureDetails details) =>
+        new(details.Width, details.Height, details.MipMapCount, details.Compression ?? string.Empty);
 }
