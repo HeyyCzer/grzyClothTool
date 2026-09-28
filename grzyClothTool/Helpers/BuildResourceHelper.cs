@@ -7,9 +7,11 @@ using grzyClothTool.Models.Drawable;
 using GTexture = grzyClothTool.Models.Texture.GTexture;
 using grzyClothTool.Views;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,7 +36,17 @@ public class BuildResourceHelper
     private readonly SemaphoreSlim _cpuLimiter;
     private readonly SemaphoreSlim _ioLimiter;
     private readonly MemoryBudget _memoryBudget;
+
+    // _cancellationToken fires on user cancellation *or* on the first worker failure, so a failed file
+    // stops the build right away instead of surfacing only after every other file was processed.
+    private readonly CancellationToken _userCancellationToken;
+    private readonly CancellationTokenSource _failureCts;
     private readonly CancellationToken _cancellationToken;
+    private Exception _firstFailure;
+
+    // Every output path claimed in this build -> what writes it. Detects two items mapping to the same
+    // file (which would silently overwrite each other) while files left by previous builds are overwritten.
+    private readonly ConcurrentDictionary<string, string> _outputOwners = new(StringComparer.OrdinalIgnoreCase);
 
     private readonly string _buildTempFolderPath;
     private readonly bool shouldUseNumber = false;
@@ -44,7 +56,9 @@ public class BuildResourceHelper
 
     public BuildResourceHelper(string name, string path, BuildResourceType resourceType, bool splitAddons, BuildReporter reporter = null, int? maxParallelism = null, CancellationToken cancellationToken = default)
     {
-        _cancellationToken = cancellationToken;
+        _userCancellationToken = cancellationToken;
+        _failureCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _cancellationToken = _failureCts.Token;
         _projectName = name;
         _buildPath = path;
         _baseBuildPath = path; // store base build path, as we will be modyfiyng _buildPath, when splitting addons
@@ -148,6 +162,61 @@ public class BuildResourceHelper
 
     private string GetScope(SexType sex) => $"{_addon?.Name ?? GetProjectName()}/{sex}";
 
+    /// <summary>
+    /// Records the first failure and cancels the remaining work. Only the first exception is kept;
+    /// the others are usually cancellations caused by it.
+    /// </summary>
+    private void Fail(Exception ex)
+    {
+        if (Interlocked.CompareExchange(ref _firstFailure, ex, null) == null)
+        {
+            _reporter.Warning("Stopping the build after the first error...");
+            _failureCts.Cancel();
+        }
+    }
+
+    /// <summary>
+    /// Runs a build and, when it stopped because of a worker failure, rethrows that failure instead of
+    /// the cancellation it caused, so the build window shows the real error.
+    /// </summary>
+    private async Task RunBuildAsync(Func<Task> build)
+    {
+        try
+        {
+            await build();
+        }
+        catch (OperationCanceledException) when (_firstFailure != null && !_userCancellationToken.IsCancellationRequested)
+        {
+            ExceptionDispatchInfo.Capture(_firstFailure).Throw();
+        }
+    }
+
+    private void ClaimOutput(string path, string owner)
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (!_outputOwners.TryAdd(fullPath, owner))
+        {
+            throw new InvalidOperationException(
+                $"Two items of this build would be written to the same file '{fullPath}': {_outputOwners[fullPath]} and {owner}. Rename or renumber one of them.");
+        }
+    }
+
+    /// <summary>Writes a generated file (ymt/meta) into the output, overwriting leftovers of previous builds.</summary>
+    private async Task WriteOutputFileAsync(string path, byte[] content, string owner)
+    {
+        try
+        {
+            ClaimOutput(path, owner);
+            await File.WriteAllBytesAsync(path, content, _cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _reporter.Error($"Writing {Path.GetFileName(path)} failed: {ex.Message}");
+            Fail(ex);
+            throw;
+        }
+    }
+
     public void SetAddon(Addon addon)
     {
         _addon = addon;
@@ -193,7 +262,7 @@ public class BuildResourceHelper
         var fileOperations = new List<Task>();
         
         var ymtPath = Path.Combine(streamDirectory, $"{pedName}_{projectName}.ymt");
-        fileOperations.Add(File.WriteAllBytesAsync(ymtPath, ymtBytes));
+        fileOperations.Add(WriteOutputFileAsync(ymtPath, ymtBytes, $"{pedName} ymt ({scope})"));
 
         foreach (var group in drawableGroups)
         {
@@ -209,17 +278,17 @@ public class BuildResourceHelper
                 
                 var prefix = RemoveInvalidChars($"{drawablePedName}_{projectName}^");
                 var finalPath = Path.Combine(folderPath, $"{prefix}{d.Name}{Path.GetExtension(d.FullFilePath)}");
-                fileOperations.Add(CopyExtraFileAsync(tempYddPath, finalPath));
+                fileOperations.Add(CopyExtraFileAsync(tempYddPath, finalPath, $"drawable {d.Name} ({scope})"));
 
                 if (!string.IsNullOrEmpty(d.ClothPhysicsPath))
                 {
-                    fileOperations.Add(CopyExtraFileAsync(d.FullClothPhysicsPath, Path.Combine(folderPath, $"{prefix}{d.Name}{Path.GetExtension(d.ClothPhysicsPath)}")));
+                    fileOperations.Add(CopyExtraFileAsync(d.FullClothPhysicsPath, Path.Combine(folderPath, $"{prefix}{d.Name}{Path.GetExtension(d.ClothPhysicsPath)}"), $"cloth physics of {d.Name} ({scope})"));
                 }
 
                 if (!string.IsNullOrEmpty(d.FirstPersonPath))
                 {
                     //todo: this probably shouldn't be hardcoded to "_1", handle it when there is option to add more alternate drawable versions
-                    fileOperations.Add(CopyExtraFileAsync(d.FullFirstPersonPath, Path.Combine(folderPath, $"{prefix}{d.Name}_1{Path.GetExtension(d.FirstPersonPath)}")));
+                    fileOperations.Add(CopyExtraFileAsync(d.FullFirstPersonPath, Path.Combine(folderPath, $"{prefix}{d.Name}_1{Path.GetExtension(d.FirstPersonPath)}"), $"first person model of {d.Name} ({scope})"));
                     
                     var name = $"{prefix}{d.Name}".Replace("^", "/");
                     AddFirstPersonFile(name);
@@ -231,7 +300,7 @@ public class BuildResourceHelper
                     var finalTexPath = Path.Combine(folderPath, $"{prefix}{buildName}.ytd");
 
                     // jpg/png/dds sources are converted to .ytd; .ytd files are copied straight from disk
-                    fileOperations.Add(WriteTextureFileAsync(t, finalTexPath, scope, convertNonYtd: true, overwrite: true));
+                    fileOperations.Add(WriteTextureFileAsync(t, finalTexPath, scope, convertNonYtd: true));
                 }
             }
         }
@@ -246,7 +315,9 @@ public class BuildResourceHelper
         );
     }
 
-    public async Task BuildFiveMResource()
+    public Task BuildFiveMResource() => RunBuildAsync(BuildFiveMResourceCoreAsync);
+
+    private async Task BuildFiveMResourceCoreAsync()
     {
         StartBuild(BuildResourceType.FiveM);
         CleanupBuildOutputDirectory();
@@ -365,7 +436,9 @@ public class BuildResourceHelper
 
     #region AltV
 
-    public async Task BuildAltVResource()
+    public Task BuildAltVResource() => RunBuildAsync(BuildAltVResourceCoreAsync);
+
+    private async Task BuildAltVResourceCoreAsync()
     {
         StartBuild(BuildResourceType.AltV);
         CleanupBuildOutputDirectory();
@@ -464,16 +537,17 @@ public class BuildResourceHelper
 
         var fileOperations = new List<Task>();
 
-        foreach(var group in drawableGroups) {
-            var ymtPath = Path.Combine(secondLevelFolder, $"{pedName}_{projectName}.ymt");
-            fileOperations.Add(File.WriteAllBytesAsync(ymtPath, ymtBytes));
+        // Written once: it used to be rewritten per drawable group, with parallel writes to the same file.
+        var ymtPath = Path.Combine(secondLevelFolder, $"{pedName}_{projectName}.ymt");
+        fileOperations.Add(WriteOutputFileAsync(ymtPath, ymtBytes, $"{pedName} ymt ({scope})"));
 
+        foreach(var group in drawableGroups) {
             foreach(var d in group) {
                 _cancellationToken.ThrowIfCancellationRequested();
                 var folderPath = d.IsProp ? thirdLevelPropFolder : thirdLevelFolder;
 
                 var tempYddPath = yddPathsDict[d];
-                fileOperations.Add(CopyExtraFileAsync(tempYddPath, Path.Combine(folderPath, $"{d.Name}{Path.GetExtension(d.FullFilePath)}")));
+                fileOperations.Add(CopyExtraFileAsync(tempYddPath, Path.Combine(folderPath, $"{d.Name}{Path.GetExtension(d.FullFilePath)}"), $"drawable {d.Name} ({scope})"));
 
                 foreach(var t in d.Textures)
                 {
@@ -481,7 +555,7 @@ public class BuildResourceHelper
                     var finalTexPath = Path.Combine(folderPath, $"{buildName}{Path.GetExtension(t.FullFilePath)}");
 
                     // AltV keeps non-optimized textures as they are (no ytd conversion)
-                    fileOperations.Add(WriteTextureFileAsync(t, finalTexPath, scope, convertNonYtd: false, overwrite: false));
+                    fileOperations.Add(WriteTextureFileAsync(t, finalTexPath, scope, convertNonYtd: false));
                 }
             }
         }
@@ -535,7 +609,9 @@ public class BuildResourceHelper
 
     #region Singleplayer
 
-    public async Task BuildSingleplayerResource()
+    public Task BuildSingleplayerResource() => RunBuildAsync(BuildSingleplayerResourceCoreAsync);
+
+    private async Task BuildSingleplayerResourceCoreAsync()
     {
         StartBuild(BuildResourceType.Singleplayer);
         string dlcRpfPath = Path.Combine(_buildPath, "dlc.rpf");
@@ -896,7 +972,7 @@ public class BuildResourceHelper
     /// Writes one texture into the build output. Textures are independent of each other, so callers
     /// start all of them and await the batch; the limiters bound the actual concurrency.
     /// </summary>
-    private async Task WriteTextureFileAsync(GTexture t, string finalPath, string scope, bool convertNonYtd, bool overwrite)
+    private async Task WriteTextureFileAsync(GTexture t, string finalPath, string scope, bool convertNonYtd)
     {
         var weight = GetTextureWeight(t, convertNonYtd ? BuildResourceType.FiveM : BuildResourceType.AltV);
         var fileName = Path.GetFileName(finalPath);
@@ -904,6 +980,8 @@ public class BuildResourceHelper
 
         try
         {
+            ClaimOutput(finalPath, $"texture {t.DisplayName} ({scope})");
+
             if (t.IsOptimizedDuringBuild || (convertNonYtd && t.Extension != ".ytd"))
             {
                 var bytes = await ProduceTextureBytesAsync(t);
@@ -924,7 +1002,8 @@ public class BuildResourceHelper
             await _ioLimiter.WaitAsync(_cancellationToken);
             try
             {
-                await Task.Run(() => File.Copy(t.FullFilePath, finalPath, overwrite), _cancellationToken);
+                // Overwrite: output folders outside "build_output" are not cleaned, so files from a previous build may exist.
+                await Task.Run(() => File.Copy(t.FullFilePath, finalPath, overwrite: true), _cancellationToken);
             }
             finally
             {
@@ -936,6 +1015,7 @@ public class BuildResourceHelper
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _reporter.Error($"[{scope}] Texture {t.DisplayName} failed: {ex.Message}");
+            Fail(ex);
             throw;
         }
     }
@@ -946,16 +1026,29 @@ public class BuildResourceHelper
         return d == null ? "default settings" : $"{d.Width}x{d.Height} {d.Compression?.Replace("D3DFMT_", "")} ({d.MipMapCount} mips)";
     }
 
-    private async Task CopyExtraFileAsync(string source, string destination)
+    /// <summary>Copies a drawable, cloth physics or first person file into the output.</summary>
+    private async Task CopyExtraFileAsync(string source, string destination, string owner)
     {
-        await _ioLimiter.WaitAsync(_cancellationToken);
         try
         {
-            await FileHelper.CopyAsync(source, destination);
+            ClaimOutput(destination, owner);
+
+            await _ioLimiter.WaitAsync(_cancellationToken);
+            try
+            {
+                // Overwrite: output folders outside "build_output" are not cleaned, so files from a previous build may exist.
+                await Task.Run(() => File.Copy(source, destination, overwrite: true), _cancellationToken);
+            }
+            finally
+            {
+                _ioLimiter.Release();
+            }
         }
-        finally
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            _ioLimiter.Release();
+            _reporter.Error($"Copying {owner} to {Path.GetFileName(destination)} failed: {ex.Message}");
+            Fail(ex);
+            throw;
         }
     }
 
@@ -993,7 +1086,7 @@ public class BuildResourceHelper
                 metaFiles.Add(metaName);
 
                 var path = _buildResourceType == BuildResourceType.FiveM ? Path.Combine(_buildPath, metaName) : Path.Combine(_buildPath, "stream", metaName);
-                tasks.Add(File.WriteAllBytesAsync(path, metaContent));
+                tasks.Add(WriteOutputFileAsync(path, metaContent, $"{metaName} ({selectedAddon.Name})"));
             }
         }
     }
@@ -1420,6 +1513,7 @@ public class BuildResourceHelper
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _reporter.Error($"[{scope}] Drawable {drawable.Name} failed: {ex.Message}");
+                    Fail(ex);
                     throw;
                 }
                 finally
@@ -1684,7 +1778,8 @@ public class BuildResourceHelper
             // only delete if the path explicitly ends with "build_output"
             if (!_baseBuildPath.EndsWith("build_output", StringComparison.OrdinalIgnoreCase))
             {
-                _reporter.Warning($"Skipping cleanup: Build path does not end with 'build_output'. Path: {_baseBuildPath}");
+                _reporter.Warning($"Skipping cleanup: Build path does not end with 'build_output'. Path: {_baseBuildPath}. " +
+                                  "Files from a previous build are overwritten, but files of items removed since then stay in the folder.");
                 return;
             }
 
