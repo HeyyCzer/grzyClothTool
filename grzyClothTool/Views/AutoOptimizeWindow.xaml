@@ -44,6 +44,30 @@
             </Setter>
         </Style>
 
+        <!-- Big packs have tens of thousands of rows: keep the lists virtualized. -->
+        <Style TargetType="ItemsControl" x:Key="VirtualizedList">
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
+            <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+            <Setter Property="ItemsPanel">
+                <Setter.Value>
+                    <ItemsPanelTemplate>
+                        <VirtualizingStackPanel/>
+                    </ItemsPanelTemplate>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ItemsControl">
+                        <ScrollViewer CanContentScroll="True" Focusable="False" VerticalScrollBarVisibility="Auto">
+                            <ItemsPresenter/>
+                        </ScrollViewer>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style TargetType="TextBlock" x:Key="SectionTitle">
             <Setter Property="FontSize" Value="15"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
@@ -100,8 +124,7 @@
                     <TextBlock Grid.Column="5" Text="Why" FontWeight="SemiBold" FontSize="11"/>
                 </Grid>
 
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl x:Name="CandidatesControl">
+                <ItemsControl x:Name="CandidatesControl" Style="{StaticResource VirtualizedList}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
                                 <Border BorderBrush="{DynamicResource Brush250}"
@@ -135,8 +158,7 @@
                                 </Border>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                </ItemsControl>
             </DockPanel>
         </Border>
 
@@ -150,8 +172,7 @@
                 BorderBrush="{DynamicResource Brush300}"
                 BorderThickness="1"
                 CornerRadius="3">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <ItemsControl x:Name="ManualIssuesControl">
+            <ItemsControl x:Name="ManualIssuesControl" Style="{StaticResource VirtualizedList}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
                             <Border BorderBrush="{DynamicResource Brush250}"
@@ -171,8 +192,7 @@
                             </Border>
                         </DataTemplate>
                     </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
+            </ItemsControl>
         </Border>
 
         <Grid Grid.Row="4" Margin="0,16,0,0">

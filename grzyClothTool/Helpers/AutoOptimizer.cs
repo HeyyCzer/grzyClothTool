@@ -235,10 +235,14 @@ public static class AutoOptimizer
             return;
         }
 
+        var seen = new HashSet<string>();
+
         foreach (var line in tooltip.Split('\n'))
         {
+            // Texture warnings are already covered by the candidates list. Contains (not equality) because
+            // concurrent drawable validations can leave the tooltip line duplicated without a separator.
             var message = line.Trim();
-            if (message.Length == 0 || message == TextureWarningsTooltip)
+            if (message.Length == 0 || message.Contains(TextureWarningsTooltip) || !seen.Add(message))
             {
                 continue;
             }
