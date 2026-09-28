@@ -13,7 +13,7 @@ internal static class Program
 
         Usage:
           grzyOptimizer <folder> [options]
-          (or drag a folder onto grzyOptimizer.exe)
+          (or drag a folder onto grzyOptimizer.exe: the settings are then asked in the terminal)
 
         By default the optimized copy of the whole folder is written to "<folder>_optimized";
         the original folder is not touched.
@@ -27,6 +27,7 @@ internal static class Program
               --dry-run          Only list what would change; write nothing
           -j, --threads <n>      Parallel files (default: CPU cores - 1)
           -v, --verbose          List every texture change
+              --no-menu          With only a folder given, run with the defaults instead of asking
           -h, --help             Show this help
 
         LOD generation (needs Blender 4.2+; any of these options turns it on):
@@ -50,6 +51,9 @@ internal static class Program
         LODs: for every drawable with a High model but no Medium/Low, Sollumz's "Generate LODs" decimates the
         High mesh (edge collapse) and only the new LOD models are added to the original .ydd; textures, shaders
         and the High model are kept as they are. Clothes with physics (.yld next to the .ydd) are skipped.
+
+        Settings: the answers of the interactive menu are saved to grzyOptimizer.settings.json next to the exe
+        and offered as defaults next time. Command line runs only take the Blender path and Sollumz mode from it.
         """;
 
     private static readonly object ConsoleLock = new();
@@ -58,9 +62,16 @@ internal static class Program
     {
         Console.OutputEncoding = Encoding.UTF8;
 
-        // Double-click without arguments: ask for the folder and keep the window open at the end.
-        bool interactive = args.Length == 0;
-        if (interactive)
+        var settings = OptimizerSettings.Load(out var settingsWarning);
+        if (settingsWarning != null)
+        {
+            WriteLine(settingsWarning, ConsoleColor.Yellow);
+        }
+
+        // Double-click (no arguments) or a folder dropped on the exe (the folder alone): ask the settings in the
+        // terminal and keep the window open at the end. Any option on the command line skips the menu.
+        bool interactive = args.Length == 0 || args is [var only] && !IsOption(only);
+        if (args.Length == 0)
         {
             Console.WriteLine("grzyOptimizer - drag a folder here (or type its path) and press Enter:");
             var typed = Console.ReadLine()?.Trim().Trim('"');
@@ -75,7 +86,15 @@ internal static class Program
         CliOptions cli;
         try
         {
-            cli = CliOptions.Parse(args);
+            cli = CliOptions.Parse(args, settings);
+            if (interactive)
+            {
+                if (!Directory.Exists(cli.InputFolder))
+                {
+                    throw new ArgumentException($"Folder not found: '{cli.InputFolder}'.");
+                }
+                cli = InteractiveMenu.Ask(cli.InputFolder!, settings);
+            }
         }
         catch (ArgumentException ex)
         {
@@ -278,6 +297,8 @@ internal static class Program
             Console.ForegroundColor = previous;
         }
     }
+
+    private static bool IsOption(string arg) => arg.StartsWith('-') || arg == "/?";
 
     private static int Pause(bool interactive, int exitCode)
     {
