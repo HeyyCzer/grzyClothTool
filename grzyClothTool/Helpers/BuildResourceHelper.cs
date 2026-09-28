@@ -4,6 +4,7 @@ using CodeWalker.Utils;
 using grzyClothTool.Constants;
 using grzyClothTool.Models;
 using grzyClothTool.Models.Drawable;
+using GTexture = grzyClothTool.Models.Texture.GTexture;
 using grzyClothTool.Views;
 using System;
 using System.Collections.Generic;
@@ -26,20 +27,28 @@ public class BuildResourceHelper
     private string _buildPath;
     private readonly string _baseBuildPath;
     private readonly bool _splitAddons;
-    private readonly IProgress<int> _progress;
+    private readonly BuildReporter _reporter;
+
+    // Shared by every addon/sex task of this build so parallel work never exceeds the machine.
+    private readonly int _maxParallelism;
+    private readonly SemaphoreSlim _cpuLimiter;
+    private readonly SemaphoreSlim _ioLimiter;
 
     private readonly string _buildTempFolderPath;
     private readonly bool shouldUseNumber = false;
 
-    private readonly List<string> firstPersonFiles = [];
+    private readonly List<string> firstPersonFiles = []; // guarded by lock (firstPersonFiles)
     private BuildResourceType _buildResourceType;
 
-    public BuildResourceHelper(string name, string path, IProgress<int> progress, BuildResourceType resourceType, bool splitAddons)
+    public BuildResourceHelper(string name, string path, BuildResourceType resourceType, bool splitAddons, BuildReporter reporter = null, int? maxParallelism = null)
     {
         _projectName = name;
         _buildPath = path;
         _baseBuildPath = path; // store base build path, as we will be modyfiyng _buildPath, when splitting addons
-        _progress = progress;
+        _reporter = reporter ?? new BuildReporter();
+        _maxParallelism = Math.Max(1, maxParallelism ?? GetDefaultParallelism());
+        _cpuLimiter = new SemaphoreSlim(_maxParallelism, _maxParallelism);
+        _ioLimiter = new SemaphoreSlim(IoParallelism, IoParallelism);
         _buildResourceType = resourceType;
         _splitAddons = splitAddons;
 
@@ -49,6 +58,68 @@ public class BuildResourceHelper
         _buildTempFolderPath = Path.Combine(buildParentDir, "buildtemp");
         Directory.CreateDirectory(_buildTempFolderPath);
     }
+
+    private const int IoParallelism = 8;
+
+    // Each 2048x2048 texture needs ~32 MB while ImageMagick processes it, so cap the worker count.
+    private const int MaxCpuParallelism = 8;
+
+    public static int GetDefaultParallelism() => Math.Clamp(Environment.ProcessorCount - 1, 1, MaxCpuParallelism);
+
+    /// <summary>
+    /// Total weighted work of a build, matching what the build reports through <see cref="BuildReporter.Complete"/>.
+    /// </summary>
+    public static long EstimateWork(IEnumerable<Addon> addons, BuildResourceType resourceType)
+    {
+        long total = 0;
+        foreach (var drawable in addons.SelectMany(a => a.Drawables))
+        {
+            total += GetYddWeight(drawable);
+            foreach (var texture in drawable.Textures)
+            {
+                total += GetTextureWeight(texture, resourceType);
+            }
+        }
+        return total;
+    }
+
+    private static long GetYddWeight(GDrawable drawable) =>
+        NeedsYddResave(drawable) ? BuildReporter.WeightYddResave : BuildReporter.WeightCopy;
+
+    private static long GetTextureWeight(GTexture texture, BuildResourceType resourceType)
+    {
+        if (texture.IsOptimizedDuringBuild)
+        {
+            return BuildReporter.WeightTextureOptimize;
+        }
+
+        // FiveM converts jpg/png/dds sources to .ytd; AltV and Singleplayer copy them as they are.
+        return resourceType == BuildResourceType.FiveM && texture.Extension != ".ytd"
+            ? BuildReporter.WeightTextureConvert
+            : BuildReporter.WeightCopy;
+    }
+
+    private static bool NeedsYddResave(GDrawable dr)
+    {
+        if (dr?.IsEncrypted == true || dr.Details?.EmbeddedTextures == null || dr.Details.EmbeddedTextures.Count == 0 || dr.Details.EmbeddedTextures.All(x => x.Value.Details.Width == 0))
+        {
+            return false;
+        }
+
+        return dr.Details.EmbeddedTextures.Any(kvp =>
+        {
+            var embeddedDto = kvp.Value;
+            return embeddedDto.IsOptimizedDuringBuild || embeddedDto.HasReplacement || embeddedDto.OriginalName != embeddedDto.Details.Name;
+        });
+    }
+
+    private void StartBuild(BuildResourceType resourceType)
+    {
+        _reporter.Start(EstimateWork(MainWindow.AddonManager.Addons, resourceType));
+        _reporter.SetPhase($"Building {resourceType} resource with {_maxParallelism} parallel worker(s)");
+    }
+
+    private string GetScope(SexType sex) => $"{_addon?.Name ?? GetProjectName()}/{sex}";
 
     public void SetAddon(Addon addon)
     {
@@ -79,6 +150,7 @@ public class BuildResourceHelper
     {
         var pedName = GetPedName(sex);
         var projectName = GetProjectName(counter);
+        var scope = GetScope(sex);
 
         var drawables = _addon.Drawables.Where(x => x.Sex == sex).ToList();
         var drawableGroups = drawables.Select((x, i) => new { Index = i, Value = x })
@@ -89,7 +161,7 @@ public class BuildResourceHelper
         var streamDirectory = Path.Combine(_buildPath, "stream");
         Directory.CreateDirectory(streamDirectory);
         
-        var yddPathsDict = await BatchResaveYdd(drawables, maxParallelism: 4, progress: _progress);
+        var yddPathsDict = await BatchResaveYdd(drawables, scope);
         
         var fileOperations = new List<Task>();
         
@@ -109,20 +181,20 @@ public class BuildResourceHelper
                 
                 var prefix = RemoveInvalidChars($"{drawablePedName}_{projectName}^");
                 var finalPath = Path.Combine(folderPath, $"{prefix}{d.Name}{Path.GetExtension(d.FullFilePath)}");
-                fileOperations.Add(FileHelper.CopyAsync(tempYddPath, finalPath));
+                fileOperations.Add(CopyExtraFileAsync(tempYddPath, finalPath));
 
                 if (!string.IsNullOrEmpty(d.ClothPhysicsPath))
                 {
-                    fileOperations.Add(FileHelper.CopyAsync(d.FullClothPhysicsPath, Path.Combine(folderPath, $"{prefix}{d.Name}{Path.GetExtension(d.ClothPhysicsPath)}")));
+                    fileOperations.Add(CopyExtraFileAsync(d.FullClothPhysicsPath, Path.Combine(folderPath, $"{prefix}{d.Name}{Path.GetExtension(d.ClothPhysicsPath)}")));
                 }
 
                 if (!string.IsNullOrEmpty(d.FirstPersonPath))
                 {
                     //todo: this probably shouldn't be hardcoded to "_1", handle it when there is option to add more alternate drawable versions
-                    fileOperations.Add(FileHelper.CopyAsync(d.FullFirstPersonPath, Path.Combine(folderPath, $"{prefix}{d.Name}_1{Path.GetExtension(d.FirstPersonPath)}")));
+                    fileOperations.Add(CopyExtraFileAsync(d.FullFirstPersonPath, Path.Combine(folderPath, $"{prefix}{d.Name}_1{Path.GetExtension(d.FirstPersonPath)}")));
                     
                     var name = $"{prefix}{d.Name}".Replace("^", "/");
-                    firstPersonFiles.Add(name);
+                    AddFirstPersonFile(name);
                 }
 
                 foreach (var t in d.Textures)
@@ -130,56 +202,13 @@ public class BuildResourceHelper
                     var buildName = RemoveInvalidChars(t.GetBuildName());
                     var finalTexPath = Path.Combine(folderPath, $"{prefix}{buildName}.ytd");
 
-                    byte[]? txtBytes = null;
-                    if (t.IsOptimizedDuringBuild)
-                    {
-                        txtBytes = await ImgHelper.Optimize(t);
-                        if (txtBytes == null)
-                        {
-                            LogHelper.Log($"Skipping corrupted texture: {t.DisplayName}", LogType.Warning);
-                            continue;
-                        }
-                        fileOperations.Add(File.WriteAllBytesAsync(finalTexPath, txtBytes));
-                    }
-                    else
-                    {
-                        if(t.Extension != ".ytd")
-                        {
-                            txtBytes = await ImgHelper.Optimize(t, true);
-                            if (txtBytes == null)
-                            {
-                                LogHelper.Log($"Skipping corrupted texture: {t.DisplayName}", LogType.Warning);
-                                continue;
-                            }
-                        } 
-                        else
-                        {
-                            txtBytes = await FileHelper.ReadAllBytesAsync(t.FullFilePath);
-                        }
-
-                        fileOperations.Add(File.WriteAllBytesAsync(finalTexPath, txtBytes));
-                    }
+                    // jpg/png/dds sources are converted to .ytd; .ytd files are copied straight from disk
+                    fileOperations.Add(WriteTextureFileAsync(t, finalTexPath, scope, convertNonYtd: true, overwrite: true));
                 }
             }
         }
 
-        int completedTasks = 0;
-        int lastReportedProgress = 0;
-
-        var runningTasks = fileOperations.ToList(); // Start all file operations
-        int totalTasks = runningTasks.Count;
-
-        while (completedTasks < totalTasks)
-        {
-            Task finishedTask = await Task.WhenAny(runningTasks);
-            completedTasks++;
-
-            if (completedTasks - lastReportedProgress >= 20 || runningTasks.Count == 0)
-            {
-                _progress.Report(completedTasks - lastReportedProgress);
-                lastReportedProgress = completedTasks;
-            }
-        }
+        await Task.WhenAll(fileOperations);
 
         await Task.Run(() =>
             {
@@ -191,6 +220,7 @@ public class BuildResourceHelper
 
     public async Task BuildFiveMResource()
     {
+        StartBuild(BuildResourceType.FiveM);
         CleanupBuildOutputDirectory();
 
         int counter = 1;
@@ -211,6 +241,7 @@ public class BuildResourceHelper
                 AddBuildTasksForSex(selectedAddon, SexType.female, tasks, metaFiles, counter);
 
                 await Task.WhenAll(tasks);
+                _reporter.SetPhase($"Writing manifests for {selectedAddon.Name}");
                 BuildFirstPersonAlternatesMeta();
                 BuildPedAlternativeVariationsMeta();
                 BuildFxManifest(metaFiles);
@@ -236,6 +267,7 @@ public class BuildResourceHelper
             }
 
             await Task.WhenAll(tasks);
+            _reporter.SetPhase("Writing manifests");
             BuildFirstPersonAlternatesMeta();
             BuildPedAlternativeVariationsMeta();
             BuildFxManifest(metaFiles);
@@ -305,6 +337,7 @@ public class BuildResourceHelper
 
     public async Task BuildAltVResource()
     {
+        StartBuild(BuildResourceType.AltV);
         CleanupBuildOutputDirectory();
 
         int counter = 1;
@@ -325,6 +358,7 @@ public class BuildResourceHelper
                 counter++;
 
                 await Task.WhenAll(tasks);
+                _reporter.SetPhase($"Writing manifests for {selectedAddon.Name}");
                 BuildAltVTomls(metaFiles);
 
                 metaFiles.Clear();
@@ -345,6 +379,7 @@ public class BuildResourceHelper
             }
 
             await Task.WhenAll(tasks);
+            _reporter.SetPhase("Writing manifests");
             BuildAltVTomls(metaFiles);
         }
 
@@ -355,6 +390,7 @@ public class BuildResourceHelper
     {
         var pedName = GetPedName(sex);
         var projectName = GetProjectName(counter);
+        var scope = GetScope(sex);
 
         var drawables = _addon.Drawables.Where(x => x.Sex == sex).ToList();
         var drawableGroups = drawables.Select((x, i) => new { Index = i, Value = x })
@@ -392,7 +428,7 @@ public class BuildResourceHelper
             Directory.CreateDirectory(dir);
         }
 
-        var yddPathsDict = await BatchResaveYdd(drawables, maxParallelism: 4, progress: _progress);
+        var yddPathsDict = await BatchResaveYdd(drawables, scope);
 
         var fileOperations = new List<Task>();
 
@@ -404,48 +440,20 @@ public class BuildResourceHelper
                 var folderPath = d.IsProp ? thirdLevelPropFolder : thirdLevelFolder;
 
                 var tempYddPath = yddPathsDict[d];
-                fileOperations.Add(FileHelper.CopyAsync(tempYddPath, Path.Combine(folderPath, $"{d.Name}{Path.GetExtension(d.FullFilePath)}")));
+                fileOperations.Add(CopyExtraFileAsync(tempYddPath, Path.Combine(folderPath, $"{d.Name}{Path.GetExtension(d.FullFilePath)}")));
 
                 foreach(var t in d.Textures)
                 {
                     var buildName = RemoveInvalidChars(t.GetBuildName());
                     var finalTexPath = Path.Combine(folderPath, $"{buildName}{Path.GetExtension(t.FullFilePath)}");
 
-                    if (t.IsOptimizedDuringBuild)
-                    {
-                        var optimizedBytes = await ImgHelper.Optimize(t);
-                        if (optimizedBytes == null)
-                        {
-                            LogHelper.Log($"Skipping corrupted texture: {t.DisplayName}", LogType.Warning);
-                            continue;
-                        }
-                        fileOperations.Add(File.WriteAllBytesAsync(finalTexPath, optimizedBytes));
-                    } 
-                    else
-                    {
-                        fileOperations.Add(FileHelper.CopyAsync(t.FullFilePath, finalTexPath));
-                    }
+                    // AltV keeps non-optimized textures as they are (no ytd conversion)
+                    fileOperations.Add(WriteTextureFileAsync(t, finalTexPath, scope, convertNonYtd: false, overwrite: false));
                 }
             }
         }
 
-        int completedTasks = 0;
-        int lastReportedProgress = 0;
-
-        var runningTasks = fileOperations.ToList(); // Start all file operations
-        int totalTasks = runningTasks.Count;
-
-        while (completedTasks < totalTasks)
-        {
-            Task finishedTask = await Task.WhenAny(runningTasks);
-            completedTasks++;
-
-            if (completedTasks - lastReportedProgress >= 20 || runningTasks.Count == 0)
-            {
-                _progress.Report(completedTasks - lastReportedProgress);
-                lastReportedProgress = completedTasks;
-            }
-        }
+        await Task.WhenAll(fileOperations);
 
         await Task.Run(() => {
             var generated = GenerateCreatureMetadata(drawables);
@@ -496,6 +504,7 @@ public class BuildResourceHelper
 
     public async Task BuildSingleplayerResource()
     {
+        StartBuild(BuildResourceType.Singleplayer);
         string dlcRpfPath = Path.Combine(_buildPath, "dlc.rpf");
         if (File.Exists(dlcRpfPath))
         {
@@ -557,6 +566,7 @@ public class BuildResourceHelper
             counter++;
         }
 
+        _reporter.SetPhase("Cleaning up");
         CleanupBuildTempDirectory();
     }
 
@@ -743,6 +753,7 @@ public class BuildResourceHelper
     {
         var pedName = GetPedName(sex);
         var projectName = GetProjectName(counter);
+        var scope = GetScope(sex);
 
         var drawables = _addon.Drawables.Where(x => x.Sex == sex).ToList();
         var drawableGroups = drawables.Select((x, i) => new { Index = i, Value = x })
@@ -750,9 +761,7 @@ public class BuildResourceHelper
                                        .Select(x => x.Select(v => v.Value).ToList())
                                        .ToList();
 
-        var yddPathsDict = await BatchResaveYdd(drawables, maxParallelism: 4, progress: _progress);
-
-        var fileOperations = new List<Task>();
+        var yddPathsDict = await BatchResaveYdd(drawables, scope);
 
         var genderRpfName = sex == SexType.male ? "_male" : "_female";
         var componentsRpf = RpfFile.CreateNew(cdimages, projectName + genderRpfName + ".rpf");
@@ -767,45 +776,159 @@ public class BuildResourceHelper
 
         RpfFile.CreateFile(componentsRpf.Root, $"{pedName}_{projectName}.ymt", ymtBytes);
 
+        // RpfFile is not thread-safe: textures are produced in parallel but written into the archive
+        // one at a time, in the original order. The window bounds how many finished files wait in memory.
+        var pending = new Queue<PendingRpfEntry>();
+        int window = _maxParallelism * 2;
+
+        async Task FlushAsync(int keep)
+        {
+            while (pending.Count > keep)
+            {
+                var entry = pending.Dequeue();
+                var bytes = await entry.Bytes;
+                if (bytes == null)
+                {
+                    _reporter.Warning($"[{scope}] Skipping corrupted texture: {entry.DisplayName}");
+                    _reporter.Complete(entry.Weight);
+                    continue;
+                }
+
+                RpfFile.CreateFile(entry.Folder, entry.FileName, bytes);
+                _reporter.Complete(entry.Weight, entry.Weight > 0 ? $"[{scope}] {entry.Description} {entry.FileName}" : null);
+            }
+        }
+
         foreach (var group in drawableGroups)
         {
             foreach (var d in group)
             {
                 var tempYddPath = yddPathsDict[d];
-                var drawableBytes = File.ReadAllBytes(tempYddPath);
+                RpfDirectoryEntry folder = d.IsProp ? propsFolder : componentsFolder;
 
-                RpfDirectoryEntry folder = d.IsProp ? propsFolder : componentsFolder;            
-                RpfFile.CreateFile(folder, $"{d.Name}{Path.GetExtension(d.FullFilePath)}", drawableBytes);
+                // Drawable progress was already reported by BatchResaveYdd, so it carries no weight here.
+                pending.Enqueue(new PendingRpfEntry(folder, $"{d.Name}{Path.GetExtension(d.FullFilePath)}", d.Name, "drawable",
+                    Task.Run(() => File.ReadAllBytes(tempYddPath)), 0));
+                await FlushAsync(window);
 
                 foreach (var t in d.Textures)
                 {
                     var displayName = RemoveInvalidChars(t.GetBuildName());
+                    var fileName = $"{displayName}{Path.GetExtension(t.FullFilePath)}";
+                    var weight = GetTextureWeight(t, BuildResourceType.Singleplayer);
 
-                    if (t.IsOptimizedDuringBuild)
-                    {
-                        var optimizedBytes = await ImgHelper.Optimize(t);
-                        if (optimizedBytes == null)
-                        {
-                            LogHelper.Log($"Skipping corrupted texture: {t.DisplayName}", LogType.Warning);
-                            continue;
-                        }
-                        RpfFile.CreateFile(folder, $"{displayName}{Path.GetExtension(t.FullFilePath)}", optimizedBytes);
-                    }
-                    else
-                    {
-                        var texBytes = File.ReadAllBytes(t.FullFilePath);
-                        RpfFile.CreateFile(folder, $"{displayName}{Path.GetExtension(t.FullFilePath)}", texBytes);
-                    }
+                    var bytes = t.IsOptimizedDuringBuild
+                        ? ProduceTextureBytesAsync(t)
+                        : Task.Run(() => File.ReadAllBytes(t.FullFilePath));
+
+                    pending.Enqueue(new PendingRpfEntry(folder, fileName, t.DisplayName,
+                        t.IsOptimizedDuringBuild ? $"texture optimized → {DescribeOptimization(t)}:" : "texture", bytes, weight));
+                    await FlushAsync(window);
                 }
             }
         }
+
+        await FlushAsync(0);
     }
+
+    private sealed record PendingRpfEntry(RpfDirectoryEntry Folder, string FileName, string DisplayName, string Description, Task<byte[]> Bytes, long Weight);
 
 
     #endregion
 
 
     #region Generic
+
+    /// <summary>
+    /// Produces the final bytes of a texture that needs ImageMagick (optimization or jpg/png/dds → ytd).
+    /// Runs on the shared CPU limiter. Returns null when the source image is corrupted.
+    /// </summary>
+    private async Task<byte[]> ProduceTextureBytesAsync(GTexture t)
+    {
+        await _cpuLimiter.WaitAsync();
+        try
+        {
+            return await Task.Run(() => ImgHelper.Optimize(t, shouldSkipOptimization: !t.IsOptimizedDuringBuild));
+        }
+        finally
+        {
+            _cpuLimiter.Release();
+        }
+    }
+
+    /// <summary>
+    /// Writes one texture into the build output. Textures are independent of each other, so callers
+    /// start all of them and await the batch; the limiters bound the actual concurrency.
+    /// </summary>
+    private async Task WriteTextureFileAsync(GTexture t, string finalPath, string scope, bool convertNonYtd, bool overwrite)
+    {
+        var weight = GetTextureWeight(t, convertNonYtd ? BuildResourceType.FiveM : BuildResourceType.AltV);
+        var fileName = Path.GetFileName(finalPath);
+
+        try
+        {
+            if (t.IsOptimizedDuringBuild || (convertNonYtd && t.Extension != ".ytd"))
+            {
+                var bytes = await ProduceTextureBytesAsync(t);
+                if (bytes == null)
+                {
+                    _reporter.Warning($"[{scope}] Skipping corrupted texture: {t.DisplayName}");
+                    _reporter.Complete(weight);
+                    return;
+                }
+
+                await File.WriteAllBytesAsync(finalPath, bytes);
+                _reporter.Complete(weight, t.IsOptimizedDuringBuild
+                    ? $"[{scope}] texture {fileName} optimized → {DescribeOptimization(t)}"
+                    : $"[{scope}] texture {fileName} converted from {t.Extension}");
+                return;
+            }
+
+            await _ioLimiter.WaitAsync();
+            try
+            {
+                await Task.Run(() => File.Copy(t.FullFilePath, finalPath, overwrite));
+            }
+            finally
+            {
+                _ioLimiter.Release();
+            }
+
+            _reporter.Complete(weight, $"[{scope}] texture {fileName} copied");
+        }
+        catch (Exception ex)
+        {
+            _reporter.Error($"[{scope}] Texture {t.DisplayName} failed: {ex.Message}");
+            throw;
+        }
+    }
+
+    private static string DescribeOptimization(GTexture t)
+    {
+        var d = t.OptimizeDetails;
+        return d == null ? "default settings" : $"{d.Width}x{d.Height} {d.Compression?.Replace("D3DFMT_", "")} ({d.MipMapCount} mips)";
+    }
+
+    private async Task CopyExtraFileAsync(string source, string destination)
+    {
+        await _ioLimiter.WaitAsync();
+        try
+        {
+            await FileHelper.CopyAsync(source, destination);
+        }
+        finally
+        {
+            _ioLimiter.Release();
+        }
+    }
+
+    private void AddFirstPersonFile(string name)
+    {
+        lock (firstPersonFiles)
+        {
+            firstPersonFiles.Add(name);
+        }
+    }
 
     private void AddBuildTasksForSex(Addon selectedAddon, SexType sexType, List<Task> tasks, List<string> metaFiles, int counter, RpfDirectoryEntry cdimages = null, RpfDirectoryEntry dataFolder = null)
     {
@@ -1036,7 +1159,8 @@ public class BuildResourceHelper
             MetaXmlBase.OpenTag(sb, 0, "FirstPersonAlternateData");
             MetaXmlBase.OpenTag(sb, 4, "alternates");
 
-            foreach (var file in firstPersonFiles)
+            // Sex/addon tasks add entries concurrently, so sort for a deterministic meta file.
+            foreach (var file in firstPersonFiles.OrderBy(f => f, StringComparer.Ordinal))
             {
                 MetaXmlBase.OpenTag(sb, 8, "Item");
                 MetaXmlBase.StringTag(sb, 12, "assetName", file);
@@ -1227,32 +1351,41 @@ public class BuildResourceHelper
     /// <summary>
     /// Batch process multiple drawables in parallel to improve performance
     /// </summary>
-    private async Task<Dictionary<GDrawable, string>> BatchResaveYdd(IEnumerable<GDrawable> drawables, int maxParallelism = 4, IProgress<int> progress = null)
+    private async Task<Dictionary<GDrawable, string>> BatchResaveYdd(IEnumerable<GDrawable> drawables, string scope)
     {
         var result = new Dictionary<GDrawable, string>();
-        var semaphore = new SemaphoreSlim(maxParallelism, maxParallelism);
         var tasks = new List<Task>();
-        int completed = 0;
-        int total = drawables.Count();
 
         foreach (var drawable in drawables)
         {
+            if (!NeedsYddResave(drawable))
+            {
+                // Nothing to rebuild: the original file is copied later, no CPU slot needed.
+                result[drawable] = drawable.FullFilePath;
+                _reporter.Complete(BuildReporter.WeightCopy, $"[{scope}] drawable {drawable.Name}");
+                continue;
+            }
+
             tasks.Add(Task.Run(async () =>
             {
-                await semaphore.WaitAsync();
+                await _cpuLimiter.WaitAsync();
                 try
                 {
                     var path = await ResaveYdd(drawable);
                     lock (result)
                     {
                         result[drawable] = path;
-                        completed++;
-                        progress?.Report(1);
                     }
+                    _reporter.Complete(BuildReporter.WeightYddResave, $"[{scope}] drawable {drawable.Name} rebuilt (embedded textures)");
+                }
+                catch (Exception ex)
+                {
+                    _reporter.Error($"[{scope}] Drawable {drawable.Name} failed: {ex.Message}");
+                    throw;
                 }
                 finally
                 {
-                    semaphore.Release();
+                    _cpuLimiter.Release();
                 }
             }));
         }
@@ -1269,8 +1402,8 @@ public class BuildResourceHelper
             string uniqueFileName = $"{dr.Id}_{Path.GetFileName(inputPath)}";
             string outputPath = Path.Combine(_buildTempFolderPath, uniqueFileName);
 
-            // If drawable is encrypted or has no embedded textures, just copy the original file without processing
-            if (dr?.IsEncrypted == true || dr.Details?.EmbeddedTextures == null || dr.Details.EmbeddedTextures.Count == 0 || dr.Details.EmbeddedTextures.All(x => x.Value.Details.Width == 0))
+            // Encrypted drawables, drawables without embedded textures or without embedded changes are copied as-is
+            if (!NeedsYddResave(dr))
             {
                 return inputPath;
             }
@@ -1280,11 +1413,6 @@ public class BuildResourceHelper
                 var embeddedDto = kvp.Value;
                 return embeddedDto.IsOptimizedDuringBuild || embeddedDto.HasReplacement || embeddedDto.OriginalName != embeddedDto.Details.Name;
             });
-
-            if (!texturesToProcess.Any())
-            {
-                return inputPath;
-            }
 
             var fileBytes = await FileHelper.ReadAllBytesAsync(inputPath);
             var yddFile = new YddFile();

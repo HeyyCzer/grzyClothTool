@@ -628,7 +628,7 @@ namespace grzyClothTool
                     var projectName = Path.GetFileNameWithoutExtension(selectedPath);
                     var buildPath = Path.Combine(tempPath, projectName);
 
-                    var bHelper = new BuildResourceHelper(projectName, buildPath, new Progress<int>(), BuildResourceType.FiveM, false);
+                    var bHelper = new BuildResourceHelper(projectName, buildPath, BuildResourceType.FiveM, false);
                     await bHelper.BuildFiveMResource();
 
                     var zipPath = Path.Combine(tempPath, $"{projectName}.zip");

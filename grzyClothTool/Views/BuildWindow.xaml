@@ -6,115 +6,200 @@
         xmlns:local="clr-namespace:grzyClothTool.Views"
         xmlns:c="clr-namespace:grzyClothTool.Controls"
         mc:Ignorable="d"
-        ResizeMode="NoResize"
+        ResizeMode="CanResize"
         WindowStartupLocation="CenterOwner"
         MouseDown="Window_MouseDown"
         Closing="Window_Closing"
         Title="grzyClothTool - Build resource"
         Background="{DynamicResource Brush50}"
-        Height="580"
-        Width="500">
+        Height="640"
+        Width="1100"
+        MinHeight="560"
+        MinWidth="820">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
-            <RowDefinition Height="50" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <StackPanel Grid.Row="0">
 
-            <GroupBox Header="Select resource type" Margin="15" Style="{DynamicResource FixedGroupBox}">
-                <StackPanel>
-                    <c:ModernLabelRadioButton 
-                        Margin="5,5,5,0"
-                        GroupName="resource"
-                        Label="FiveM"
-                        IsChecked="True"
-                        MyBtnSelectEvent="RadioButton_ChangedEvent"
-                    />
-                    <c:ModernLabelRadioButton 
-                        Margin="5,1,5,5"
-                        GroupName="resource"
-                        Label="AltV"
-                        MyBtnSelectEvent="RadioButton_ChangedEvent"
-                    />
-                    <c:ModernLabelRadioButton 
-                        Margin="5,1,5,5"
-                        GroupName="resource"
-                        Label="Singleplayer"
-                        MyBtnSelectEvent="RadioButton_ChangedEvent"
-                    />
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="440" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto">
+                <StackPanel IsEnabled="{Binding IsBuilding, Converter={StaticResource InverseBooleanConverter}}">
+
+                    <GroupBox Header="Select resource type" Margin="15" Style="{DynamicResource FixedGroupBox}">
+                        <StackPanel>
+                            <c:ModernLabelRadioButton
+                                Margin="5,5,5,0"
+                                GroupName="resource"
+                                Label="FiveM"
+                                IsChecked="True"
+                                MyBtnSelectEvent="RadioButton_ChangedEvent"
+                            />
+                            <c:ModernLabelRadioButton
+                                Margin="5,1,5,5"
+                                GroupName="resource"
+                                Label="AltV"
+                                MyBtnSelectEvent="RadioButton_ChangedEvent"
+                            />
+                            <c:ModernLabelRadioButton
+                                Margin="5,1,5,5"
+                                GroupName="resource"
+                                Label="Singleplayer"
+                                MyBtnSelectEvent="RadioButton_ChangedEvent"
+                            />
+                        </StackPanel>
+                    </GroupBox>
+
+                    <c:ModernLabelTextBox
+                        x:Name="name"
+                        Label="Project name"
+                        Margin="15,15,15,0"
+                        VerticalAlignment="Top"
+                        HorizontalAlignment="Stretch"
+                        FilterMode="ProjectName"
+                        Text="{Binding ProjectName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                    <c:ModernLabelTextBox
+                        x:Name="output"
+                        Label="Output folder"
+                        Margin="15,15,15,0"
+                        VerticalAlignment="Top"
+                        HorizontalAlignment="Stretch"
+                        IsFolderSelection="True"
+                        Text="{Binding BuildPath}" />
+
+                    <c:ModernLabelCheckBox
+                        Label="Build addons as separate resources"
+                        x:Name="split_addons"
+                        VerticalAlignment="Top"
+                        Margin="10,10,10,0"
+                        IsChecked="{Binding SplitAddons, Mode=TwoWay}"/>
+
+                    <c:ModernLabelCheckBox
+                        Label="Auto-optimize textures with performance warnings"
+                        x:Name="auto_optimize"
+                        VerticalAlignment="Top"
+                        Margin="10,5,10,0"
+                        ToolTip="Resizes, compresses and generates mip maps for every texture flagged with a warning (same as View > Performance Optimizer)."
+                        IsChecked="{Binding AutoOptimizeTextures, Mode=TwoWay}"/>
+
+                    <Separator Margin="0, 15" />
+
+                    <TextBlock
+                        Text="{Binding WarningMessage}"
+                        TextWrapping="Wrap"
+                        Foreground="{DynamicResource Brush900}"
+                        Margin="15,5,15,0"
+                        Visibility="{Binding IsWarningVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
                 </StackPanel>
-            </GroupBox>
+            </ScrollViewer>
 
-            <c:ModernLabelTextBox 
-                x:Name="name"
-                Label="Project name"
-                Margin="15,15,15,0"
-                VerticalAlignment="Top"
-                HorizontalAlignment="Stretch"
-                FilterMode="ProjectName"
-                Text="{Binding ProjectName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+            <Grid Grid.Column="1" Margin="0,15,15,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-            <c:ModernLabelTextBox 
-                x:Name="output"
-                Label="Output folder"
-                Margin="15,15,15,0"
-                VerticalAlignment="Top"
-                HorizontalAlignment="Stretch"
-                IsFolderSelection="True"
-                Text="{Binding BuildPath}" />
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0">
+                        <TextBlock Text="{Binding StatusPhase}" FontSize="14" FontWeight="SemiBold" Foreground="{DynamicResource Brush900}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Text="{Binding StatusTime}" FontSize="12" Foreground="{DynamicResource Brush700}" Margin="0,2,0,0" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" HorizontalAlignment="Right">
+                        <TextBlock Text="{Binding StatusPercent}" FontSize="22" FontWeight="Bold" Foreground="{DynamicResource Brush900}" HorizontalAlignment="Right" />
+                        <TextBlock Text="{Binding StatusCounts}" FontSize="11" Foreground="{DynamicResource Brush700}" HorizontalAlignment="Right" />
+                    </StackPanel>
+                </Grid>
 
-            <c:ModernLabelCheckBox 
-                Label="Build addons as separate resources" 
-                x:Name="split_addons" 
-                VerticalAlignment="Top" 
-                Margin="10,10,10,0"
-                IsChecked="{Binding SplitAddons, Mode=TwoWay}"/>
+                <Border Grid.Row="1"
+                        Background="{DynamicResource Brush100}"
+                        BorderBrush="{DynamicResource Brush300}"
+                        BorderThickness="1"
+                        CornerRadius="3">
+                    <!-- Virtualized: big packs log tens of thousands of lines -->
+                    <ListBox x:Name="ConsoleList"
+                             ItemsSource="{Binding ConsoleLines}"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             FontFamily="Consolas"
+                             FontSize="11"
+                             Foreground="{DynamicResource Brush900}"
+                             ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                             ScrollViewer.CanContentScroll="True"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="6,0" />
+                                <Setter Property="Margin" Value="0" />
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock x:Name="Line" Text="{Binding Text}" />
+                                <DataTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding IsWarning}" Value="True">
+                                        <Setter TargetName="Line" Property="Foreground" Value="#d97706" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsError}" Value="True">
+                                        <Setter TargetName="Line" Property="Foreground" Value="#dc2626" />
+                                        <Setter TargetName="Line" Property="FontWeight" Value="Bold" />
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
 
-            <c:ModernLabelCheckBox 
-                Label="Auto-optimize textures with performance warnings" 
-                x:Name="auto_optimize" 
-                VerticalAlignment="Top" 
-                Margin="10,5,10,0"
-                ToolTip="Resizes, compresses and generates mip maps for every texture flagged with a warning (same as View > Performance Optimizer)."
-                IsChecked="{Binding AutoOptimizeTextures, Mode=TwoWay}"/>
+                <Grid Grid.Row="2" Margin="0,6,0,0">
+                    <c:ModernLabelCheckBox
+                        Label="Auto-scroll"
+                        HorizontalAlignment="Left"
+                        IsChecked="{Binding AutoScroll, Mode=TwoWay}"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="Copy log" Padding="10,3" Margin="0,0,6,0" Click="CopyLog_Click" />
+                        <Button Content="Open output folder" Padding="10,3" Click="OpenOutput_Click" />
+                    </StackPanel>
+                </Grid>
+            </Grid>
+        </Grid>
 
-            <Separator Margin="0, 15" />
-
-            <TextBlock
-                Text="{Binding WarningMessage}"
-                TextWrapping="Wrap"
-                Foreground="{DynamicResource Brush900}"
-                Margin="15,5,15,0"
-                Visibility="{Binding IsWarningVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-        </StackPanel>
-
-        <Grid Grid.Row="1" Margin="15,5,15,5" >
+        <Grid Grid.Row="1" Margin="15,10,15,10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <ProgressBar 
-                x:Name="pbBuild" 
-                Grid.Column="0" 
-                Grid.ColumnSpan="2" 
-                HorizontalAlignment="Left"
-                Width="300"
+            <ProgressBar
+                x:Name="pbBuild"
+                Grid.Column="0"
+                Height="14"
+                Margin="0,0,15,0"
+                Minimum="0"
+                Maximum="100"
                 Background="{DynamicResource Brush200}"
                 BorderBrush="{DynamicResource Brush100}"
-                Value="{Binding ProgressValue}"
-                Visibility="{Binding IsBuilding, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                Value="{Binding ProgressValue, Mode=OneWay}" />
 
-            <Border Grid.Column="2" >
-                <c:CustomButton 
-                    HorizontalAlignment="Right"
-                    x:Name="build"
-                    CornerRadius="5"
-                    Width="150"
-                    IsEnabled="{Binding CanBuild}"
-                    Label="Build resource"
-                    MyBtnClickEvent="build_MyBtnClickEvent" />
-            </Border>
+            <c:CustomButton
+                Grid.Column="1"
+                HorizontalAlignment="Right"
+                x:Name="build"
+                CornerRadius="5"
+                Width="150"
+                IsEnabled="{Binding CanBuild}"
+                Label="Build resource"
+                MyBtnClickEvent="build_MyBtnClickEvent" />
         </Grid>
     </Grid>
 </Window>
