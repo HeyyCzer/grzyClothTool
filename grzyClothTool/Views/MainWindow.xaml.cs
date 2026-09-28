@@ -204,6 +204,36 @@ namespace grzyClothTool
             });
         }
 
+        private int _loadingDepth;
+
+        /// <summary>
+        /// Shows a blocking loading overlay while <paramref name="action"/> runs.
+        /// The overlay is rendered before the action starts and stays until the UI has finished
+        /// laying out whatever the action produced (e.g. navigating to the project page).
+        /// </summary>
+        public async Task RunWithLoadingAsync(string message, Func<Task> action)
+        {
+            _loadingDepth++;
+            LoadingText.Text = message;
+            LoadingOverlay.Visibility = Visibility.Visible;
+
+            try
+            {
+                // Let the overlay render before any heavy work blocks the UI thread
+                await System.Windows.Threading.Dispatcher.Yield(System.Windows.Threading.DispatcherPriority.Background);
+                await action();
+                // Wait until layout/render of the resulting UI is done before hiding
+                await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+            }
+            finally
+            {
+                if (--_loadingDepth == 0)
+                {
+                    LoadingOverlay.Visibility = Visibility.Collapsed;
+                }
+            }
+        }
+
         private void LogHelper_LogMessageCreated(object sender, LogMessageEventArgs e)
         {
             this.Dispatcher.Invoke(() =>
@@ -413,32 +443,37 @@ namespace grzyClothTool
                 return false;
             }
 
-            ProgressHelper.Start("Started loading addon");
-
-            try
+            var success = false;
+            await RunWithLoadingAsync("Loading addon...", async () =>
             {
-                AddonManager.Addons = [];
-                AddonManager.IsExternalProject = !dialog.IsSelfContained;
-                DuplicateDetector.Clear();
+                ProgressHelper.Start("Started loading addon");
 
-                foreach (var metaFile in validMetaFiles)
+                try
                 {
-                    await AddonManager.LoadAddon(metaFile, shouldSetProjectName);
+                    AddonManager.Addons = [];
+                    AddonManager.IsExternalProject = !dialog.IsSelfContained;
+                    DuplicateDetector.Clear();
+
+                    foreach (var metaFile in validMetaFiles)
+                    {
+                        await AddonManager.LoadAddon(metaFile, shouldSetProjectName);
+                    }
+
+                    AddonManager.ProjectName = dialog.ProjectName;
+
+                    var projectType = dialog.IsSelfContained ? "Self-contained" : "External";
+                    ProgressHelper.Stop($"{projectType} addon loaded in {{0}}", true);
+                    SaveHelper.SetUnsavedChanges(true);
+                    success = true;
                 }
+                catch (Exception ex)
+                {
+                    LogHelper.Log($"Failed to load addon: {ex.Message}", Views.LogType.Error);
+                    ProgressHelper.Stop("Failed to load addon", false);
+                }
+            });
 
-                AddonManager.ProjectName = dialog.ProjectName;
-
-                var projectType = dialog.IsSelfContained ? "Self-contained" : "External";
-                ProgressHelper.Stop($"{projectType} addon loaded in {{0}}", true);
-                SaveHelper.SetUnsavedChanges(true);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                LogHelper.Log($"Failed to load addon: {ex.Message}", Views.LogType.Error);
-                ProgressHelper.Stop("Failed to load addon", false);
-                return false;
-            }
+            return success;
         }
 
         public async Task AddAddonAsync(bool shouldSetProjectName = false)
@@ -502,7 +537,13 @@ namespace grzyClothTool
                 Filter = "grzyClothTool project (*.gctproject)|*.gctproject"
             };
 
-            if (openFileDialog.ShowDialog() == true)
+            if (openFileDialog.ShowDialog() != true)
+            {
+                return false;
+            }
+
+            var success = false;
+            await RunWithLoadingAsync($"Importing {openFileDialog.SafeFileName}...", async () =>
             {
                 ProgressHelper.Start($"Started importing {openFileDialog.SafeFileName}");
 
@@ -540,7 +581,7 @@ namespace grzyClothTool
                     {
                         LogHelper.Log("No meta files found in project file, this shouldn't happen, please report it to developer on discord");
                         ProgressHelper.Stop("Project import failed", false);
-                        return false;
+                        return;
                     }
 
                     foreach (var metaFile in metaFiles)
@@ -550,17 +591,16 @@ namespace grzyClothTool
 
                     ProgressHelper.Stop("Project imported in {0}", true);
                     SaveHelper.SetUnsavedChanges(true);
-                    return true;
+                    success = true;
                 }
                 catch (Exception ex)
                 {
                     LogHelper.Log($"Failed to import project: {ex.Message}", Views.LogType.Error);
                     ProgressHelper.Stop("Failed to import project", false);
-                    return false;
                 }
-            }
+            });
 
-            return false;
+            return success;
         }
 
         private async void ExportProject_Click(object sender, RoutedEventArgs e)
