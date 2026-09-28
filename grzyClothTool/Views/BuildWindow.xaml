@@ -12,7 +12,7 @@
         Closing="Window_Closing"
         Title="grzyClothTool - Build resource"
         Background="{DynamicResource Brush50}"
-        Height="550"
+        Height="580"
         Width="500">
     <Grid>
         <Grid.RowDefinitions>
@@ -69,6 +69,14 @@
                 VerticalAlignment="Top" 
                 Margin="10,10,10,0"
                 IsChecked="{Binding SplitAddons, Mode=TwoWay}"/>
+
+            <c:ModernLabelCheckBox 
+                Label="Auto-optimize textures with performance warnings" 
+                x:Name="auto_optimize" 
+                VerticalAlignment="Top" 
+                Margin="10,5,10,0"
+                ToolTip="Resizes, compresses and generates mip maps for every texture flagged with a warning (same as View > Performance Optimizer)."
+                IsChecked="{Binding AutoOptimizeTextures, Mode=TwoWay}"/>
 
             <Separator Margin="0, 15" />
 

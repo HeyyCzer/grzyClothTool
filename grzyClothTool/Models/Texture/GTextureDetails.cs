@@ -21,24 +21,8 @@ public class GTextureDetails
         IsOptimizeNeeded = false;
         IsOptimizeNeededTooltip = string.Empty;
         
-        int resolutionLimit = 2048;
-        
-        if (Type != null)
-        {
-            if (Type.Contains("diffuse", StringComparison.OrdinalIgnoreCase))
-            {
-                resolutionLimit = SettingsHelper.Instance.TextureResolutionLimitDiffuse;
-            }
-            else if (Type.Contains("normal", StringComparison.OrdinalIgnoreCase))
-            {
-                resolutionLimit = SettingsHelper.Instance.TextureResolutionLimitNormal;
-            }
-            else if (Type.Contains("specular", StringComparison.OrdinalIgnoreCase))
-            {
-                resolutionLimit = SettingsHelper.Instance.TextureResolutionLimitSpecular;
-            }
-        }
-        
+        int resolutionLimit = TextureOptimizer.GetResolutionLimit(Type);
+
         if (Width > resolutionLimit || Height > resolutionLimit)
         {
             IsOptimizeNeeded = true;
@@ -56,6 +40,12 @@ public class GTextureDetails
         {
             IsOptimizeNeeded = true;
             IsOptimizeNeededTooltip += $"Texture has {MipMapCount} mip maps but should have {expectedMipMapCount}. Optimize it to generate the correct amount.\n";
+        }
+
+        if (TextureOptimizer.IsUncompressed(Compression))
+        {
+            IsOptimizeNeeded = true;
+            IsOptimizeNeededTooltip += $"Texture is uncompressed ({Compression}) and uses 4x more memory than DXT5. Optimize it to compress.\n";
         }
     }
 }

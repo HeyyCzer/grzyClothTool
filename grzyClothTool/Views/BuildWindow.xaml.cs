@@ -83,6 +83,20 @@ namespace grzyClothTool.Views
             }
         }
 
+        private bool _autoOptimizeTextures;
+        public bool AutoOptimizeTextures
+        {
+            get => _autoOptimizeTextures;
+            set
+            {
+                if (_autoOptimizeTextures != value)
+                {
+                    _autoOptimizeTextures = value;
+                    OnPropertyChanged(nameof(AutoOptimizeTextures));
+                }
+            }
+        }
+
         private bool _isWarningVisible;
         public bool IsWarningVisible
         {
@@ -243,6 +257,15 @@ namespace grzyClothTool.Views
             ProgressValue = 0;
             pbBuild.Maximum = totalSteps;
             IsBuilding = true;
+
+            if (AutoOptimizeTextures)
+            {
+                var scan = AutoOptimizer.Scan(MainWindow.AddonManager.Addons);
+                if (AutoOptimizer.Apply(scan.Candidates) > 0)
+                {
+                    SaveHelper.SetUnsavedChanges(true);
+                }
+            }
 
             await SaveHelper.SaveAsync();
 

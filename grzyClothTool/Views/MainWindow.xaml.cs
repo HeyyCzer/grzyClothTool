@@ -648,6 +648,12 @@ namespace grzyClothTool
             inspector.ShowDialog();
         }
 
+        private void PerformanceOptimizer_Click(object sender, RoutedEventArgs e)
+        {
+            var optimizer = new AutoOptimizeWindow();
+            optimizer.ShowDialog();
+        }
+
         private static void TempFoldersCleanup()
         {
             // At the start of app we can remove temp folders from previous session
