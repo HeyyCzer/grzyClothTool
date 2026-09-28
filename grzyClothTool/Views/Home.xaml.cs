@@ -333,46 +333,49 @@ namespace grzyClothTool.Views
                     return;
                 }
 
-                var projectFolder = Path.Combine(mainProjectsFolder, projectName);
-
-                if (Directory.Exists(projectFolder))
+                await MainWindow.Instance.RunWithLoadingAsync($"Creating project {projectName}...", async () =>
                 {
-                    ClearProjectFolder(projectFolder);
-                }
+                    var projectFolder = Path.Combine(mainProjectsFolder, projectName);
 
-                Directory.CreateDirectory(projectFolder);
-                if (!isExternal)
-                {
-                    var assetsFolder = Path.Combine(projectFolder, GlobalConstants.ASSETS_FOLDER_NAME);
-                    Directory.CreateDirectory(assetsFolder);
-                }
+                    if (Directory.Exists(projectFolder))
+                    {
+                        ClearProjectFolder(projectFolder);
+                    }
 
-                MainWindow.AddonManager.Addons.Clear();
-                MainWindow.AddonManager.Groups.Clear();
-                MainWindow.AddonManager.Tags.Clear();
-                
-                MainWindow.AddonManager.ProjectName = projectName;
-                MainWindow.AddonManager.IsExternalProject = isExternal;
-                MainWindow.AddonManager.CreateAddon();
+                    Directory.CreateDirectory(projectFolder);
+                    if (!isExternal)
+                    {
+                        var assetsFolder = Path.Combine(projectFolder, GlobalConstants.ASSETS_FOLDER_NAME);
+                        Directory.CreateDirectory(assetsFolder);
+                    }
 
-                SaveHelper.SetUnsavedChanges(true);
-                await SaveHelper.SaveAsync();
+                    MainWindow.AddonManager.Addons.Clear();
+                    MainWindow.AddonManager.Groups.Clear();
+                    MainWindow.AddonManager.Tags.Clear();
 
-                var saveFileName = SaveHelper.GetSaveFileName(isExternal);
-                var newProjectAutoSavePath = Path.Combine(projectFolder, saveFileName);
-                PersistentSettingsHelper.Instance.AddRecentProject(
-                    newProjectAutoSavePath,
-                    projectName,
-                    drawableCount: 0,
-                    addonCount: 1,
-                    isExternal: isExternal
-                );
-                
-                LoadRecentProjects();
+                    MainWindow.AddonManager.ProjectName = projectName;
+                    MainWindow.AddonManager.IsExternalProject = isExternal;
+                    MainWindow.AddonManager.CreateAddon();
 
-                var projectType = isExternal ? "External" : "Self-contained";
-                LogHelper.Log($"Created new {projectType} project: {projectName} at {projectFolder}");
-                MainWindow.NavigationHelper.Navigate("Project");
+                    SaveHelper.SetUnsavedChanges(true);
+                    await SaveHelper.SaveAsync();
+
+                    var saveFileName = SaveHelper.GetSaveFileName(isExternal);
+                    var newProjectAutoSavePath = Path.Combine(projectFolder, saveFileName);
+                    PersistentSettingsHelper.Instance.AddRecentProject(
+                        newProjectAutoSavePath,
+                        projectName,
+                        drawableCount: 0,
+                        addonCount: 1,
+                        isExternal: isExternal
+                    );
+
+                    LoadRecentProjects();
+
+                    var projectType = isExternal ? "External" : "Self-contained";
+                    LogHelper.Log($"Created new {projectType} project: {projectName} at {projectFolder}");
+                    MainWindow.NavigationHelper.Navigate("Project");
+                });
             }
             catch (Exception ex)
             {
@@ -389,7 +392,7 @@ namespace grzyClothTool.Views
             var success = await MainWindow.Instance.OpenAddonAsync(true);
             if (success)
             {
-                MainWindow.NavigationHelper.Navigate("Project");
+                await NavigateToProjectAsync();
             }
         }
 
@@ -398,8 +401,27 @@ namespace grzyClothTool.Views
             var success = await MainWindow.Instance.ImportProjectAsync(true);
             if (success)
             {
-                MainWindow.NavigationHelper.Navigate("Project");
+                await NavigateToProjectAsync();
             }
+        }
+
+        private static Task NavigateToProjectAsync()
+        {
+            return MainWindow.Instance.RunWithLoadingAsync("Opening project...", () =>
+            {
+                MainWindow.NavigationHelper.Navigate("Project");
+                return Task.CompletedTask;
+            });
+        }
+
+        private async Task LoadSaveAndOpenAsync(string filePath)
+        {
+            await MainWindow.Instance.RunWithLoadingAsync($"Loading {Path.GetFileName(Path.GetDirectoryName(filePath))}...", async () =>
+            {
+                await SaveHelper.LoadSaveFileAsync(filePath);
+                LoadRecentProjects();
+                MainWindow.NavigationHelper.Navigate("Project");
+            });
         }
 
         private async void OpenSave_Click(object sender, RoutedEventArgs e)
@@ -420,9 +442,7 @@ namespace grzyClothTool.Views
                         return;
                     }
 
-                    await SaveHelper.LoadSaveFileAsync(openFileDialog.FileName);
-                    LoadRecentProjects();
-                    MainWindow.NavigationHelper.Navigate("Project");
+                    await LoadSaveAndOpenAsync(openFileDialog.FileName);
                 }
             }
             catch (Exception ex)
@@ -459,9 +479,7 @@ namespace grzyClothTool.Views
                         return;
                     }
 
-                    await SaveHelper.LoadSaveFileAsync(filePath);
-                    LoadRecentProjects();
-                    MainWindow.NavigationHelper.Navigate("Project");
+                    await LoadSaveAndOpenAsync(filePath);
                 }
                 catch (Exception ex)
                 {

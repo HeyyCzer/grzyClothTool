@@ -2,14 +2,18 @@
 using grzyClothTool.Helpers;
 using grzyClothTool.Models;
 using System;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using static grzyClothTool.Controls.CustomMessageBox;
 using static grzyClothTool.Enums;
 
@@ -55,8 +59,8 @@ namespace grzyClothTool.Views
                 }
             }
         }
-        private int _progressValue;
-        public int ProgressValue
+        private double _progressValue;
+        public double ProgressValue
         {
             get => _progressValue;
             set
@@ -79,6 +83,86 @@ namespace grzyClothTool.Views
                 {
                     _splitAddons = value;
                     OnPropertyChanged(nameof(SplitAddons));
+                }
+            }
+        }
+
+        // Console keeps the newest lines only; "Copy log" returns the complete log.
+        private const int MaxConsoleLines = 3000;
+        private static readonly TimeSpan UiRefreshInterval = TimeSpan.FromMilliseconds(200);
+
+        public ObservableCollection<BuildLogEntry> ConsoleLines { get; } = [];
+
+        private BuildReporter _reporter;
+        private CancellationTokenSource _buildCts;
+
+        private bool _isCancelRequested;
+        public bool IsCancelRequested
+        {
+            get => _isCancelRequested;
+            set
+            {
+                if (_isCancelRequested != value)
+                {
+                    _isCancelRequested = value;
+                    OnPropertyChanged(nameof(IsCancelRequested));
+                }
+            }
+        }
+        private readonly DispatcherTimer _uiTimer;
+
+        private bool _autoScroll = true;
+        public bool AutoScroll
+        {
+            get => _autoScroll;
+            set
+            {
+                if (_autoScroll != value)
+                {
+                    _autoScroll = value;
+                    OnPropertyChanged(nameof(AutoScroll));
+                }
+            }
+        }
+
+        private string _statusPhase = "Ready to build";
+        public string StatusPhase
+        {
+            get => _statusPhase;
+            set { _statusPhase = value; OnPropertyChanged(nameof(StatusPhase)); }
+        }
+
+        private string _statusTime = string.Empty;
+        public string StatusTime
+        {
+            get => _statusTime;
+            set { _statusTime = value; OnPropertyChanged(nameof(StatusTime)); }
+        }
+
+        private string _statusPercent = string.Empty;
+        public string StatusPercent
+        {
+            get => _statusPercent;
+            set { _statusPercent = value; OnPropertyChanged(nameof(StatusPercent)); }
+        }
+
+        private string _statusCounts = string.Empty;
+        public string StatusCounts
+        {
+            get => _statusCounts;
+            set { _statusCounts = value; OnPropertyChanged(nameof(StatusCounts)); }
+        }
+
+        private bool _autoOptimizeTextures;
+        public bool AutoOptimizeTextures
+        {
+            get => _autoOptimizeTextures;
+            set
+            {
+                if (_autoOptimizeTextures != value)
+                {
+                    _autoOptimizeTextures = value;
+                    OnPropertyChanged(nameof(AutoOptimizeTextures));
                 }
             }
         }
@@ -147,7 +231,80 @@ namespace grzyClothTool.Views
             InitializeComponent();
             DataContext = this;
 
+            _uiTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = UiRefreshInterval };
+            _uiTimer.Tick += (_, _) => RefreshBuildProgress();
+
             this.Loaded += Window_Loaded;
+        }
+
+        private void RefreshBuildProgress()
+        {
+            if (_reporter == null)
+            {
+                return;
+            }
+
+            var newLines = _reporter.DrainPending();
+            if (newLines.Count > 0)
+            {
+                // Only the tail matters when a burst is bigger than the console itself.
+                foreach (var line in newLines.Skip(Math.Max(0, newLines.Count - MaxConsoleLines)))
+                {
+                    ConsoleLines.Add(line);
+                }
+
+                while (ConsoleLines.Count > MaxConsoleLines)
+                {
+                    ConsoleLines.RemoveAt(0);
+                }
+
+                if (AutoScroll && ConsoleLines.Count > 0)
+                {
+                    ConsoleList.ScrollIntoView(ConsoleLines[^1]);
+                }
+            }
+
+            var snapshot = _reporter.GetSnapshot();
+            ProgressValue = snapshot.Percent;
+            StatusPhase = snapshot.Phase;
+            StatusPercent = $"{snapshot.Percent:0.0}%";
+            StatusCounts = $"{snapshot.DoneItems} file(s) · {snapshot.Warnings} warning(s) · {snapshot.Errors} error(s)";
+
+            string remaining;
+            if (snapshot.Remaining == null)
+            {
+                remaining = "estimating...";
+            }
+            else if (snapshot.Remaining == TimeSpan.Zero)
+            {
+                remaining = "done";
+            }
+            else
+            {
+                remaining = $"~{FormatDuration(snapshot.Remaining.Value)}";
+            }
+
+            StatusTime = $"Elapsed {FormatDuration(snapshot.Elapsed)} · Remaining {remaining}";
+        }
+
+        private static string FormatDuration(TimeSpan time) =>
+            time.TotalHours >= 1 ? time.ToString(@"h\:mm\:ss") : time.ToString(@"mm\:ss");
+
+        private void CopyLog_Click(object sender, RoutedEventArgs e)
+        {
+            var log = _reporter?.GetFullLog();
+            if (!string.IsNullOrEmpty(log))
+            {
+                Clipboard.SetText(log);
+            }
+        }
+
+        private void OpenOutput_Click(object sender, RoutedEventArgs e)
+        {
+            if (Directory.Exists(BuildPath))
+            {
+                Process.Start("explorer.exe", BuildPath);
+            }
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)
@@ -200,6 +357,18 @@ namespace grzyClothTool.Views
             e.Cancel = IsBuilding;
         }
 
+        private void CancelBuild_Click(object sender, RoutedEventArgs e)
+        {
+            if (!IsBuilding || _buildCts == null || IsCancelRequested)
+            {
+                return;
+            }
+
+            IsCancelRequested = true;
+            _reporter?.Warning("Cancellation requested - finishing the files currently being processed...");
+            _buildCts.Cancel();
+        }
+
         private async Task BuildResource(BuildResourceHelper buildHelper)
         {
             switch (_resourceType)
@@ -238,37 +407,73 @@ namespace grzyClothTool.Views
                 buildButton.IsEnabled = false; // blocking interactions - spamming button led to building multiple times/exception
             }
 
-            int totalSteps = MainWindow.AddonManager.GetTotalDrawableAndTextureCount();
-
             ProgressValue = 0;
-            pbBuild.Maximum = totalSteps;
+            ConsoleLines.Clear();
+            _reporter = new BuildReporter();
+            _buildCts?.Dispose();
+            _buildCts = new CancellationTokenSource();
+            IsCancelRequested = false;
             IsBuilding = true;
+            _uiTimer.Start();
 
+            if (AutoOptimizeTextures)
+            {
+                var scan = AutoOptimizer.Scan(MainWindow.AddonManager.Addons);
+                var applied = AutoOptimizer.Apply(scan.Candidates);
+                if (applied > 0)
+                {
+                    SaveHelper.SetUnsavedChanges(true);
+                }
+                _reporter.Info($"Auto-optimize: {applied} texture(s) marked for optimization.");
+            }
+
+            _reporter.Info("Saving project...");
             await SaveHelper.SaveAsync();
 
+            var succeeded = false;
+            var cancelled = false;
+            BuildResourceHelper buildHelper = null;
+            // Parallel texture processing allocates many large buffers; avoid blocking full GCs
+            // (which pause every worker) while the build runs.
+            var previousLatencyMode = GCSettings.LatencyMode;
+            GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
             try
             {
-                var timer = new Stopwatch();
+                var timer = Stopwatch.StartNew();
 
-                timer.Start();
+                var token = _buildCts.Token;
+                buildHelper = new BuildResourceHelper(ProjectName, BuildPath, _resourceType, SplitAddons, _reporter, cancellationToken: token);
 
-                var progress = new Progress<int>(value => ProgressValue += value);
-                var buildHelper = new BuildResourceHelper(ProjectName, BuildPath, progress, _resourceType, SplitAddons);
-
-                await Task.Run(() => BuildResource(buildHelper)); // moved out of ui thread, so users don't think tool stopped responding
+                await Task.Run(() => BuildResource(buildHelper), token); // moved out of ui thread, so users don't think tool stopped responding
 
                 timer.Stop();
-                CustomMessageBox.Show($"Build done, elapsed time: {timer.Elapsed}", "Build done", CustomMessageBoxButtons.OpenFolder, BuildPath);
+                _reporter.Finish();
+                _reporter.Info($"Build done in {timer.Elapsed}. Output: {BuildPath}");
                 LogHelper.Log($"Build done, elapsed time: {timer.Elapsed}");
+                succeeded = true;
+            }
+            catch (OperationCanceledException) when (_buildCts.IsCancellationRequested)
+            {
+                cancelled = true;
+                _reporter.Finish(completed: false);
+                buildHelper?.CleanupAfterCancel();
+                _reporter.Warning($"Build cancelled. Output in {BuildPath} is incomplete - build again before using it.");
             }
             catch (Exception ex)
             {
+                _reporter.Finish(completed: false);
+                _reporter.Error($"Build failed: {ex.Message}");
                 LogHelper.Log($"Build failed: {ex}", LogType.Error);
-                CustomMessageBox.Show($"Build failed:\n\n{ex}", "Error", CustomMessageBoxButtons.OKOnly, CustomMessageBoxIcon.Error);
             }
             finally
             {
-                ProgressValue = totalSteps; // make sure that progress bar is full
+                GCSettings.LatencyMode = previousLatencyMode;
+                // Hand the freed texture buffers back to the OS once, like after loading a project.
+                GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                GC.Collect();
+
+                _uiTimer.Stop();
+                RefreshBuildProgress(); // flush the last lines and the final state
 
                 if (buildButton != null)
                 {
@@ -276,7 +481,23 @@ namespace grzyClothTool.Views
                 }
 
                 IsBuilding = false;
-                Close();
+                IsCancelRequested = false;
+            }
+
+            // The window stays open so the console can be reviewed after the build.
+            if (cancelled)
+            {
+                StatusPhase = "Build cancelled";
+            }
+            else if (succeeded)
+            {
+                StatusPhase = "Build done";
+                CustomMessageBox.Show($"Build done, elapsed time: {_reporter.GetSnapshot().Elapsed}", "Build done", CustomMessageBoxButtons.OpenFolder, BuildPath);
+            }
+            else
+            {
+                StatusPhase = "Build failed - see the console for details";
+                CustomMessageBox.Show("Build failed. Check the console in the build window for details.", "Error", CustomMessageBoxButtons.OKOnly, CustomMessageBoxIcon.Error);
             }
         }
 
