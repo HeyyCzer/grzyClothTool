@@ -20,12 +20,15 @@ Now you can do _almost_ everything you could do before with _other available too
   - See how much your hair will shrink under hair in 3D Previewer
   - Check how much your heels require height in 3D Previewer
   - You don't have to worry about 128 items limit in one addon, it automatically splits to multiple addons for you!
+  - Easily optimize all your textures
+  - Easily generate LODs for your models
 - Open Source
   - You don't need to be scared about running some weird obfuscated .exe files on your computer, that no one knows what they are doing in the background 😆
   - It is free to use and will always be
 
 # Mentions
 
+- **[grzybeek](https://github.com/grzybeek/grzyClothTool)** - The original author of grzyClothTool
 - **[dexyfex](https://github.com/dexyfex/CodeWalker)** - 3D Previewer wouldn't be possible without him and CodeWalker! [Support dexyfex on patreon](https://www.patreon.com/dexyfex)
 - [JagodaMods](https://discord.gg/jagoda) - A lot of motivation and ideas 💖
 - [ook](https://github.com/ook3d) - Fixes and contribution
@@ -38,10 +41,6 @@ Now you can do _almost_ everything you could do before with _other available too
 # Donate
 
 - If you find this tool useful in your daily modding, please consider donating to support the development through [Sponsor](https://github.com/grzybeek/grzyClothTool?sponsor) button at the top of this page, so that I can continue to keep working on it.
-
-# Need support?
-
-- Join [Discord](https://discord.gg/HCQutNhxWt), but because tool is still WIP, currently support is only for people that are supporting me on [ko-fi](https://ko-fi.com/grzybeek)
 
 # Screenshots
 
