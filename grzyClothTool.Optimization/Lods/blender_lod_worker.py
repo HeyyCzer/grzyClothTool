@@ -8,11 +8,15 @@ Loads Sollumz, then reads one JSON job per line from stdin and answers one line 
 
 Only lines starting with the marker are protocol; Blender and Sollumz print plenty of other things to stdout.
 For every Drawable Model that has a High mesh, the missing Medium/Low levels are generated with Sollumz's
-"Generate LODs" operator (edge-collapse decimation of the High mesh), then the file is exported as CodeWalker XML.
+"Generate LODs" operator (edge-collapse decimation of a welded copy of the High mesh, then the High normals are
+transferred back), then the file is exported as CodeWalker XML.
 """
 
 import addon_utils
 import argparse
+import bmesh
+import mathutils.kdtree
+import numpy as np
 import importlib
 import importlib.util
 import json
@@ -158,6 +162,85 @@ def tri_count(mesh) -> int:
     return len(mesh.loop_triangles)
 
 
+def vertex_normals(mesh) -> np.ndarray:
+    """Per-vertex normal as imported (Sollumz stores the game normals as custom corner normals)."""
+    corner = np.empty(len(mesh.loops) * 3, dtype=np.float32)
+    mesh.loops.foreach_get("normal", corner)
+    loop_verts = np.empty(len(mesh.loops), dtype=np.int32)
+    mesh.loops.foreach_get("vertex_index", loop_verts)
+    normals = np.zeros((len(mesh.vertices), 3), dtype=np.float32)
+    normals[loop_verts] = corner.reshape(-1, 3)
+    return normals
+
+
+def vertex_positions(mesh) -> np.ndarray:
+    positions = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
+    mesh.vertices.foreach_get("co", positions)
+    return positions.reshape(-1, 3)
+
+
+def build_kdtree(positions: np.ndarray):
+    kd = mathutils.kdtree.KDTree(len(positions))
+    for i, co in enumerate(positions):
+        kd.insert(co, i)
+    kd.balance()
+    return kd
+
+
+def welded_copy(mesh, positions: np.ndarray, normals: np.ndarray, kd, distance: float = 1e-5):
+    """Copy of ``mesh`` with the vertices split by the game format (UV seams, hard edges) merged back together.
+
+    Game vertex buffers duplicate a vertex wherever its UV or normal changes, and Sollumz imports them as they are,
+    so every seam is an open border. Edge-collapse decimation then shrinks each small island on its own until it
+    disappears, which leaves holes. UVs and colours live on the face corners in Blender, so merging keeps them.
+    Coincident vertices facing opposite ways (the two sides of double-sided cloth) are kept apart.
+    """
+    welded = mesh.copy()
+    bm = bmesh.new()
+    bm.from_mesh(welded)
+    bm.verts.ensure_lookup_table()
+
+    targets = {}
+    for i, co in enumerate(positions):
+        if bm.verts[i] in targets:
+            continue
+        for _, j, _ in kd.find_range(co, distance):
+            if j > i and bm.verts[j] not in targets and float(np.dot(normals[i], normals[j])) > 0.0:
+                targets[bm.verts[j]] = bm.verts[i]
+
+    if targets:
+        bmesh.ops.weld_verts(bm, targetmap=targets)
+    bm.to_mesh(welded)
+    bm.free()
+    return welded
+
+
+def transfer_normals(target, positions: np.ndarray, normals: np.ndarray, kd):
+    """Gives each corner of a decimated mesh the game normal of the closest High vertex on the same side."""
+    loop_verts = np.empty(len(target.loops), dtype=np.int32)
+    target.loops.foreach_get("vertex_index", loop_verts)
+    face_normals = np.empty(len(target.polygons) * 3, dtype=np.float32)
+    target.polygons.foreach_get("normal", face_normals)
+    face_normals = face_normals.reshape(-1, 3)
+    loop_faces = np.empty(len(target.loops), dtype=np.int32)
+    for poly in target.polygons:
+        loop_faces[poly.loop_start:poly.loop_start + poly.loop_total] = poly.index
+
+    target_positions = vertex_positions(target)
+    result = np.empty((len(target.loops), 3), dtype=np.float32)
+    for loop, (vert, face) in enumerate(zip(loop_verts, loop_faces)):
+        face_normal = face_normals[face]
+        candidates = kd.find_n(target_positions[vert], 8)
+        # Same side first (double-sided cloth), then, among the equally close ones, the best match (hard edges).
+        facing = [c for c in candidates if float(np.dot(normals[c[1]], face_normal)) > 0.0] or candidates
+        closest = min(c[2] for c in facing)
+        best = max((c for c in facing if c[2] <= closest + 1e-4), key=lambda c: float(np.dot(normals[c[1]], face_normal)))
+        result[loop] = normals[best[1]]
+
+    target.polygons.foreach_set("use_smooth", np.ones(len(target.polygons), dtype=bool))
+    target.normals_split_custom_set(result)
+
+
 def generate_lods(package: str, ratios: dict[str, float], log: list[str]) -> int:
     props = importlib.import_module(f"{package}.sollumz_properties")
     SollumType, LODLevel = props.SollumType, props.LODLevel
@@ -182,10 +265,14 @@ def generate_lods(package: str, ratios: dict[str, float], log: list[str]) -> int
         obj.select_set(True)
         view_layer.objects.active = obj
 
+        positions, normals = vertex_positions(high), vertex_normals(high)
+        kd = build_kdtree(positions)
+        reference = welded_copy(high, positions, normals, kd)
+
         # per_lod_ratio is indexed by LODLevel order: very high, high, medium, low, very low.
         per_lod_ratio = (1.0, 1.0, ratios.get("medium", 1.0), ratios.get("low", 1.0), 0.15)
         result = bpy.ops.sollumz.auto_lod(
-            ref_mesh_name=high.name,
+            ref_mesh_name=reference.name,
             levels={by_name[name].value for name in missing},
             decimate_method="COLLAPSE",
             decimate_from_original=True,
@@ -197,8 +284,14 @@ def generate_lods(package: str, ratios: dict[str, float], log: list[str]) -> int
         if result != {"FINISHED"}:
             raise RuntimeError(f"Sollumz 'Generate LODs' failed on '{obj.name}' ({result}).")
 
+        for name in missing:
+            transfer_normals(lods.get_lod(by_name[name]).mesh, positions, normals, kd)
+        welded_verts = len(reference.vertices)
+        bpy.data.meshes.remove(reference)
+
         stats = ", ".join(f"{name} {tri_count(lods.get_lod(by_name[name]).mesh)}" for name in missing)
-        log.append(f"{obj.name}: high {tri_count(high)} tris -> {stats}")
+        log.append(f"{obj.name}: high {tri_count(high)} tris ({len(high.vertices)} verts, {welded_verts} welded)"
+                   f" -> {stats}")
         generated += len(missing)
 
     return generated
