@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Texture optimization shared by grzyClothTool and the standalone grzyOptimizer CLI. No WPF dependencies. -->
+  <!-- Texture optimization (and Blender/Sollumz LOD generation) shared by grzyClothTool and the standalone grzyOptimizer CLI. No WPF dependencies. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -10,6 +10,11 @@
   <ItemGroup>
     <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="14.17.2" />
     <PackageReference Include="SharpDX.Mathematics" Version="4.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Runs inside Blender; extracted to a temp file when LOD generation starts. -->
+    <EmbeddedResource Include="Lods\blender_lod_worker.py" LogicalName="grzyClothTool.Optimization.Lods.blender_lod_worker.py" />
   </ItemGroup>
 
   <ItemGroup>

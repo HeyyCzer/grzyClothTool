@@ -1,0 +1,3 @@
+[submodule "external/Sollumz"]
+	path = external/Sollumz
+	url = https://github.com/Sollumz/Sollumz.git

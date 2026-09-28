@@ -1,4 +1,5 @@
 using CodeWalker.GameFiles;
+using grzyClothTool.Optimization.Lods;
 
 namespace grzyClothTool.Optimization;
 
@@ -18,6 +19,9 @@ public sealed record FolderOptimizerOptions
 
     public int MaxParallelism { get; init; } = Math.Max(1, Environment.ProcessorCount - 1);
 
+    /// <summary>Generate missing Medium/Low LODs of .ydd files with Blender + Sollumz. Null leaves models untouched.</summary>
+    public LodGenerationOptions? Lods { get; init; }
+
     public int GetLimit(TextureKind kind) => kind switch
     {
         TextureKind.Normal => NormalLimit,
@@ -28,7 +32,7 @@ public sealed record FolderOptimizerOptions
 
 public enum FileOutcome
 {
-    /// <summary>At least one texture was (or, in a dry run, would be) optimized.</summary>
+    /// <summary>At least one texture was (or, in a dry run, would be) optimized, or LODs were added.</summary>
     Optimized,
     /// <summary>Texture file without anything to optimize.</summary>
     Unchanged,
@@ -49,12 +53,17 @@ public sealed record FileResult(
     IReadOnlyList<string> Notes,
     long SizeBefore,
     long SizeAfter,
-    string? Error = null);
+    string? Error = null,
+    IReadOnlyList<LodChange>? LodChanges = null)
+{
+    public IReadOnlyList<LodChange> Lods => LodChanges ?? [];
+}
 
 public sealed record FolderOptimizationSummary(IReadOnlyList<FileResult> Files, TimeSpan Elapsed)
 {
     public int Count(FileOutcome outcome) => Files.Count(f => f.Outcome == outcome);
     public int TexturesOptimized => Files.Sum(f => f.Changes.Count);
+    public int LodsGenerated => Files.Sum(f => f.Lods.Count);
     public long SizeBefore => Files.Sum(f => f.SizeBefore);
     public long SizeAfter => Files.Sum(f => f.SizeAfter);
     public long TextureMemoryBefore => Files.SelectMany(f => f.Changes).Sum(c => TextureRules.EstimateSizeBytes(c.Before));
@@ -65,6 +74,7 @@ public sealed record FolderOptimizationSummary(IReadOnlyList<FileResult> Files, 
 /// Optimizes every .ytd and every texture embedded in .ydd files of a folder (recursively), applying the
 /// same rules as grzyClothTool: nearest power of two within the resolution limit, DXT5 for uncompressed
 /// textures and a full mip chain. Works on any resource layout; no grzyClothTool project is needed.
+/// With <see cref="FolderOptimizerOptions.Lods"/> set, .ydd files missing Medium/Low LODs also get them generated.
 /// </summary>
 public sealed class FolderOptimizer(FolderOptimizerOptions options)
 {
@@ -97,22 +107,23 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             CancellationToken = cancellationToken
         };
 
-        await Parallel.ForEachAsync(files, parallelOptions, (path, _) =>
+        await using var lods = options.Lods == null ? null : new LodGenerator(options.Lods);
+
+        await Parallel.ForEachAsync(files, parallelOptions, async (path, token) =>
         {
-            var result = ProcessFile(path);
+            var result = await ProcessFileAsync(path, lods, token);
             lock (results)
             {
                 results.Add(result);
             }
             progress?.Report(result);
-            return ValueTask.CompletedTask;
         });
 
         results.Sort((a, b) => string.Compare(a.RelativePath, b.RelativePath, PathComparison));
         return new FolderOptimizationSummary(results, DateTime.UtcNow - started);
     }
 
-    private FileResult ProcessFile(string path)
+    private async Task<FileResult> ProcessFileAsync(string path, LodGenerator? lods, CancellationToken cancellationToken)
     {
         var relative = Path.GetRelativePath(_input, path);
         var extension = Path.GetExtension(path).ToLowerInvariant();
@@ -137,6 +148,7 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
         }
 
         var changes = new List<TextureChange>();
+        var lodChanges = new List<LodChange>();
         var notes = new List<string>();
         byte[]? optimized;
 
@@ -144,15 +156,15 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
         {
             optimized = loaded is YtdFile ytd
                 ? OptimizeYtd(ytd, changes, notes)
-                : OptimizeYdd((YddFile)loaded, changes, notes);
+                : await OptimizeYddAsync((YddFile)loaded, path, lods, changes, lodChanges, notes, cancellationToken);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             CopyToOutput(path, relative);
-            return new FileResult(relative, FileOutcome.Failed, changes, notes, original.Length, original.Length, ex.Message);
+            return new FileResult(relative, FileOutcome.Failed, changes, notes, original.Length, original.Length, ex.Message, lodChanges);
         }
 
-        if (changes.Count == 0)
+        if (changes.Count == 0 && lodChanges.Count == 0)
         {
             CopyToOutput(path, relative);
             return new FileResult(relative, FileOutcome.Unchanged, [], notes, original.Length, original.Length);
@@ -160,11 +172,16 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
 
         if (options.DryRun || optimized == null)
         {
-            return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, original.Length);
+            // optimized is also null when the planned LODs could not be generated; keep the original then.
+            if (!options.DryRun)
+            {
+                CopyToOutput(path, relative);
+            }
+            return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, original.Length, null, lodChanges);
         }
 
         WriteResult(path, relative, optimized);
-        return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, optimized.Length);
+        return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, optimized.Length, null, lodChanges);
     }
 
     private static YtdFile LoadYtd(byte[] data)
@@ -200,7 +217,16 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
         return ytd.Save();
     }
 
-    private byte[]? OptimizeYdd(YddFile ydd, List<TextureChange> changes, List<string> notes)
+    private async Task<byte[]?> OptimizeYddAsync(YddFile ydd, string path, LodGenerator? lods, List<TextureChange> changes,
+        List<LodChange> lodChanges, List<string> notes, CancellationToken cancellationToken)
+    {
+        bool texturesReplaced = OptimizeYddTextures(ydd, changes, notes);
+        bool lodsAdded = lods != null && await lods.AddMissingLodsAsync(ydd, path, lodChanges, notes, options.DryRun, cancellationToken);
+        return texturesReplaced || lodsAdded ? ydd.Save() : null;
+    }
+
+    /// <summary>Returns true when at least one embedded texture was replaced.</summary>
+    private bool OptimizeYddTextures(YddFile ydd, List<TextureChange> changes, List<string> notes)
     {
         bool anyReplaced = false;
         foreach (var drawable in ydd.Drawables ?? [])
@@ -237,7 +263,7 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             anyReplaced = true;
         }
 
-        return anyReplaced ? ydd.Save() : null;
+        return anyReplaced;
     }
 
     /// <summary>Optimizes the textures that need it; returns new textures by (case-insensitive) name.</summary>
