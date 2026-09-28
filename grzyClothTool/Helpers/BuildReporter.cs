@@ -54,6 +54,7 @@ public class BuildReporter
     private int _errors;
     private volatile string _phase = "Preparing";
     private volatile bool _finished;
+    private volatile bool _completed;
 
     public void Start(long totalWork)
     {
@@ -62,8 +63,10 @@ public class BuildReporter
         Info($"Build started. Estimated work: {totalWork} units.");
     }
 
-    public void Finish()
+    /// <param name="completed">False when the build failed or was cancelled: the percentage then stays where it stopped.</param>
+    public void Finish(bool completed = true)
     {
+        _completed = completed;
         _finished = true;
         _stopwatch.Stop();
     }
@@ -108,17 +111,21 @@ public class BuildReporter
         var elapsed = _stopwatch.Elapsed;
 
         double percent = total > 0 ? done * 100.0 / total : 0;
-        if (!_finished)
+        if (!_completed)
         {
             // Manifests/meta files are written after the tracked work, so never claim 100% early.
             percent = Math.Min(percent, 99.0);
         }
 
         TimeSpan? remaining = null;
-        if (_finished)
+        if (_completed)
         {
             percent = 100;
             remaining = TimeSpan.Zero;
+        }
+        else if (_finished)
+        {
+            remaining = null;
         }
         else if (done > 0 && percent >= MinPercentForEta && elapsed >= MinElapsedForEta)
         {

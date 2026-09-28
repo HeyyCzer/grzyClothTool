@@ -191,8 +191,17 @@
                 BorderBrush="{DynamicResource Brush100}"
                 Value="{Binding ProgressValue, Mode=OneWay}" />
 
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button
+                x:Name="cancelBuild"
+                Content="Cancel build"
+                Padding="12,4"
+                Margin="0,0,10,0"
+                Click="CancelBuild_Click"
+                IsEnabled="{Binding IsCancelRequested, Converter={StaticResource InverseBooleanConverter}}"
+                Visibility="{Binding IsBuilding, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
             <c:CustomButton
-                Grid.Column="1"
                 HorizontalAlignment="Right"
                 x:Name="build"
                 CornerRadius="5"
@@ -200,6 +209,7 @@
                 IsEnabled="{Binding CanBuild}"
                 Label="Build resource"
                 MyBtnClickEvent="build_MyBtnClickEvent" />
+            </StackPanel>
         </Grid>
     </Grid>
 </Window>

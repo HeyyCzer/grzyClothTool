@@ -29,9 +29,7 @@ public static class ImgHelper
                     return null;
                 }
                 var txt = ytd.TextureDict.Textures[0];
-                var dds = CodeWalker.Utils.DDSIO.GetDDSFile(txt);
-
-                return new MagickImage(dds);
+                return TryReadUncompressedPixels(txt) ?? new MagickImage(CodeWalker.Utils.DDSIO.GetDDSFile(txt));
             }
             else
             {
@@ -43,6 +41,32 @@ public static class ImgHelper
             TelemetryHelper.CaptureExceptionWithAttachment(e, path);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Reads the top mip level of an uncompressed texture straight from its pixel data, skipping the
+    /// DDS container copy and DDS decoding. Returns null for formats/layouts that need the DDS path.
+    /// </summary>
+    private static MagickImage TryReadUncompressedPixels(Texture txt)
+    {
+        var mapping = txt.Format switch
+        {
+            TextureFormat.D3DFMT_A8R8G8B8 => "BGRA",
+            TextureFormat.D3DFMT_X8R8G8B8 => "BGRP", // P = padding byte, no alpha
+            TextureFormat.D3DFMT_A8B8G8R8 => "RGBA",
+            _ => null
+        };
+
+        var data = txt.Data?.FullData;
+        uint topLevelSize = (uint)txt.Width * txt.Height * 4;
+        if (mapping == null || txt.Stride != txt.Width * 4 || data == null || data.Length < topLevelSize)
+        {
+            return null;
+        }
+
+        var img = new MagickImage();
+        img.ReadPixels(data, 0, topLevelSize, new PixelReadSettings(txt.Width, txt.Height, StorageType.Char, mapping));
+        return img;
     }
 
     public static int GetCorrectMipMapAmount(int width, int height)

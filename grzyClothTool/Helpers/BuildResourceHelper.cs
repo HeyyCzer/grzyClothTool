@@ -33,6 +33,8 @@ public class BuildResourceHelper
     private readonly int _maxParallelism;
     private readonly SemaphoreSlim _cpuLimiter;
     private readonly SemaphoreSlim _ioLimiter;
+    private readonly MemoryBudget _memoryBudget;
+    private readonly CancellationToken _cancellationToken;
 
     private readonly string _buildTempFolderPath;
     private readonly bool shouldUseNumber = false;
@@ -40,8 +42,9 @@ public class BuildResourceHelper
     private readonly List<string> firstPersonFiles = []; // guarded by lock (firstPersonFiles)
     private BuildResourceType _buildResourceType;
 
-    public BuildResourceHelper(string name, string path, BuildResourceType resourceType, bool splitAddons, BuildReporter reporter = null, int? maxParallelism = null)
+    public BuildResourceHelper(string name, string path, BuildResourceType resourceType, bool splitAddons, BuildReporter reporter = null, int? maxParallelism = null, CancellationToken cancellationToken = default)
     {
+        _cancellationToken = cancellationToken;
         _projectName = name;
         _buildPath = path;
         _baseBuildPath = path; // store base build path, as we will be modyfiyng _buildPath, when splitting addons
@@ -49,6 +52,7 @@ public class BuildResourceHelper
         _maxParallelism = Math.Max(1, maxParallelism ?? GetDefaultParallelism());
         _cpuLimiter = new SemaphoreSlim(_maxParallelism, _maxParallelism);
         _ioLimiter = new SemaphoreSlim(IoParallelism, IoParallelism);
+        _memoryBudget = new MemoryBudget(MemoryBudget.GetDefaultCapacity());
         _buildResourceType = resourceType;
         _splitAddons = splitAddons;
 
@@ -61,10 +65,33 @@ public class BuildResourceHelper
 
     private const int IoParallelism = 8;
 
-    // Each 2048x2048 texture needs ~32 MB while ImageMagick processes it, so cap the worker count.
-    private const int MaxCpuParallelism = 8;
+    // One worker per core (minus one for the UI); memory is bounded separately by _memoryBudget.
+    public static int GetDefaultParallelism() => Math.Max(1, Environment.ProcessorCount - 1);
 
-    public static int GetDefaultParallelism() => Math.Clamp(Environment.ProcessorCount - 1, 1, MaxCpuParallelism);
+    // Rough peak bytes while one texture is processed: managed copies of the source (file, decompressed
+    // resource, pixel data) plus ImageMagick's Q8 pixel cache for the source and the resized image.
+    private const int TextureBytesPerPixelEstimate = 4 * 5;
+    private const int DefaultTextureSize = 2048;
+
+    private static long EstimateTextureCost(GTexture t)
+    {
+        long width = t.TxtDetails?.Width > 0 ? t.TxtDetails.Width : DefaultTextureSize;
+        long height = t.TxtDetails?.Height > 0 ? t.TxtDetails.Height : DefaultTextureSize;
+        return width * height * TextureBytesPerPixelEstimate;
+    }
+
+    // A YDD resave holds the whole file (compressed + decompressed) and re-encodes its embedded textures.
+    private static long EstimateYddCost(GDrawable d)
+    {
+        try
+        {
+            return Math.Max(new FileInfo(d.FullFilePath).Length * 8, 64L * 1024 * 1024);
+        }
+        catch (Exception)
+        {
+            return 64L * 1024 * 1024;
+        }
+    }
 
     /// <summary>
     /// Total weighted work of a build, matching what the build reports through <see cref="BuildReporter.Complete"/>.
@@ -116,7 +143,7 @@ public class BuildResourceHelper
     private void StartBuild(BuildResourceType resourceType)
     {
         _reporter.Start(EstimateWork(MainWindow.AddonManager.Addons, resourceType));
-        _reporter.SetPhase($"Building {resourceType} resource with {_maxParallelism} parallel worker(s)");
+        _reporter.SetPhase($"Building {resourceType} resource with {_maxParallelism} parallel worker(s), {_memoryBudget.Capacity / (1024 * 1024)} MB memory budget");
     }
 
     private string GetScope(SexType sex) => $"{_addon?.Name ?? GetProjectName()}/{sex}";
@@ -172,6 +199,7 @@ public class BuildResourceHelper
         {
             foreach (var d in group)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 var tempYddPath = yddPathsDict[d];
 
                 var drawablePedName = d.IsProp ? $"{pedName}_p" : pedName;
@@ -233,6 +261,7 @@ public class BuildResourceHelper
         {
             foreach (var selectedAddon in MainWindow.AddonManager.Addons)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 SetAddon(selectedAddon);
                 SetNumber(counter);
                 UpdateBuildPath();
@@ -257,6 +286,7 @@ public class BuildResourceHelper
         {
             foreach (var selectedAddon in MainWindow.AddonManager.Addons)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 SetAddon(selectedAddon);
                 SetNumber(counter);
 
@@ -348,6 +378,7 @@ public class BuildResourceHelper
         {
             foreach (var selectedAddon in MainWindow.AddonManager.Addons)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 SetAddon(selectedAddon);
                 SetNumber(counter);
                 UpdateBuildPath();
@@ -369,6 +400,7 @@ public class BuildResourceHelper
         {
             foreach (var selectedAddon in MainWindow.AddonManager.Addons)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 SetAddon(selectedAddon);
                 SetNumber(counter);
 
@@ -437,6 +469,7 @@ public class BuildResourceHelper
             fileOperations.Add(File.WriteAllBytesAsync(ymtPath, ymtBytes));
 
             foreach(var d in group) {
+                _cancellationToken.ThrowIfCancellationRequested();
                 var folderPath = d.IsProp ? thirdLevelPropFolder : thirdLevelFolder;
 
                 var tempYddPath = yddPathsDict[d];
@@ -544,6 +577,7 @@ public class BuildResourceHelper
         
         foreach (var selectedAddon in MainWindow.AddonManager.Addons)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             SetAddon(selectedAddon);
             SetNumber(counter);
 
@@ -803,12 +837,13 @@ public class BuildResourceHelper
         {
             foreach (var d in group)
             {
+                _cancellationToken.ThrowIfCancellationRequested();
                 var tempYddPath = yddPathsDict[d];
                 RpfDirectoryEntry folder = d.IsProp ? propsFolder : componentsFolder;
 
                 // Drawable progress was already reported by BatchResaveYdd, so it carries no weight here.
                 pending.Enqueue(new PendingRpfEntry(folder, $"{d.Name}{Path.GetExtension(d.FullFilePath)}", d.Name, "drawable",
-                    Task.Run(() => File.ReadAllBytes(tempYddPath)), 0));
+                    Task.Run(() => File.ReadAllBytes(tempYddPath), _cancellationToken), 0));
                 await FlushAsync(window);
 
                 foreach (var t in d.Textures)
@@ -819,7 +854,7 @@ public class BuildResourceHelper
 
                     var bytes = t.IsOptimizedDuringBuild
                         ? ProduceTextureBytesAsync(t)
-                        : Task.Run(() => File.ReadAllBytes(t.FullFilePath));
+                        : Task.Run(() => File.ReadAllBytes(t.FullFilePath), _cancellationToken);
 
                     pending.Enqueue(new PendingRpfEntry(folder, fileName, t.DisplayName,
                         t.IsOptimizedDuringBuild ? $"texture optimized → {DescribeOptimization(t)}:" : "texture", bytes, weight));
@@ -841,14 +876,15 @@ public class BuildResourceHelper
 
     /// <summary>
     /// Produces the final bytes of a texture that needs ImageMagick (optimization or jpg/png/dds → ytd).
-    /// Runs on the shared CPU limiter. Returns null when the source image is corrupted.
+    /// Runs on the shared CPU limiter and memory budget. Returns null when the source image is corrupted.
     /// </summary>
     private async Task<byte[]> ProduceTextureBytesAsync(GTexture t)
     {
-        await _cpuLimiter.WaitAsync();
+        await _cpuLimiter.WaitAsync(_cancellationToken);
         try
         {
-            return await Task.Run(() => ImgHelper.Optimize(t, shouldSkipOptimization: !t.IsOptimizedDuringBuild));
+            using var memory = await _memoryBudget.AcquireAsync(EstimateTextureCost(t), _cancellationToken);
+            return await Task.Run(() => ImgHelper.Optimize(t, shouldSkipOptimization: !t.IsOptimizedDuringBuild), _cancellationToken);
         }
         finally
         {
@@ -885,10 +921,10 @@ public class BuildResourceHelper
                 return;
             }
 
-            await _ioLimiter.WaitAsync();
+            await _ioLimiter.WaitAsync(_cancellationToken);
             try
             {
-                await Task.Run(() => File.Copy(t.FullFilePath, finalPath, overwrite));
+                await Task.Run(() => File.Copy(t.FullFilePath, finalPath, overwrite), _cancellationToken);
             }
             finally
             {
@@ -897,7 +933,7 @@ public class BuildResourceHelper
 
             _reporter.Complete(weight, $"[{scope}] texture {fileName} copied");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _reporter.Error($"[{scope}] Texture {t.DisplayName} failed: {ex.Message}");
             throw;
@@ -912,7 +948,7 @@ public class BuildResourceHelper
 
     private async Task CopyExtraFileAsync(string source, string destination)
     {
-        await _ioLimiter.WaitAsync();
+        await _ioLimiter.WaitAsync(_cancellationToken);
         try
         {
             await FileHelper.CopyAsync(source, destination);
@@ -1359,6 +1395,7 @@ public class BuildResourceHelper
 
         foreach (var drawable in drawables)
         {
+            _cancellationToken.ThrowIfCancellationRequested();
             if (!NeedsYddResave(drawable))
             {
                 // Nothing to rebuild: the original file is copied later, no CPU slot needed.
@@ -1369,9 +1406,10 @@ public class BuildResourceHelper
 
             tasks.Add(Task.Run(async () =>
             {
-                await _cpuLimiter.WaitAsync();
+                await _cpuLimiter.WaitAsync(_cancellationToken);
                 try
                 {
+                    using var memory = await _memoryBudget.AcquireAsync(EstimateYddCost(drawable), _cancellationToken);
                     var path = await ResaveYdd(drawable);
                     lock (result)
                     {
@@ -1379,7 +1417,7 @@ public class BuildResourceHelper
                     }
                     _reporter.Complete(BuildReporter.WeightYddResave, $"[{scope}] drawable {drawable.Name} rebuilt (embedded textures)");
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     _reporter.Error($"[{scope}] Drawable {drawable.Name} failed: {ex.Message}");
                     throw;
@@ -1388,7 +1426,7 @@ public class BuildResourceHelper
                 {
                     _cpuLimiter.Release();
                 }
-            }));
+            }, _cancellationToken));
         }
 
         await Task.WhenAll(tasks);
@@ -1677,6 +1715,32 @@ public class BuildResourceHelper
             _reporter.Warning($"Error during build output cleanup: {ex.Message}");
         }
     }
+    /// <summary>
+    /// Removes what a cancelled build leaves behind that is never valid on its own: the temp folder and,
+    /// for singleplayer, the half-written dlc.rpf. Loose FiveM/AltV output stays for inspection.
+    /// </summary>
+    public void CleanupAfterCancel()
+    {
+        CleanupBuildTempDirectory();
+
+        if (_buildResourceType == BuildResourceType.Singleplayer)
+        {
+            var dlcRpfPath = Path.Combine(_baseBuildPath, "dlc.rpf");
+            try
+            {
+                if (File.Exists(dlcRpfPath))
+                {
+                    File.Delete(dlcRpfPath);
+                    _reporter.Info($"Deleted incomplete {dlcRpfPath}");
+                }
+            }
+            catch (Exception ex)
+            {
+                _reporter.Warning($"Could not delete incomplete dlc.rpf: {ex.Message}");
+            }
+        }
+    }
+
     private void CleanupBuildTempDirectory()
     {
         try

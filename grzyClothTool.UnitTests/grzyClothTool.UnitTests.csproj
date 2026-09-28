@@ -26,4 +26,10 @@
     <ProjectReference Include="..\grzyClothTool\grzyClothTool.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Reference Include="CodeWalker.Core">
+      <HintPath>..\packages\CodeWalker.Core.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
 </Project>

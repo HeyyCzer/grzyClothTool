@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
@@ -93,6 +94,21 @@ namespace grzyClothTool.Views
         public ObservableCollection<BuildLogEntry> ConsoleLines { get; } = [];
 
         private BuildReporter _reporter;
+        private CancellationTokenSource _buildCts;
+
+        private bool _isCancelRequested;
+        public bool IsCancelRequested
+        {
+            get => _isCancelRequested;
+            set
+            {
+                if (_isCancelRequested != value)
+                {
+                    _isCancelRequested = value;
+                    OnPropertyChanged(nameof(IsCancelRequested));
+                }
+            }
+        }
         private readonly DispatcherTimer _uiTimer;
 
         private bool _autoScroll = true;
@@ -341,6 +357,18 @@ namespace grzyClothTool.Views
             e.Cancel = IsBuilding;
         }
 
+        private void CancelBuild_Click(object sender, RoutedEventArgs e)
+        {
+            if (!IsBuilding || _buildCts == null || IsCancelRequested)
+            {
+                return;
+            }
+
+            IsCancelRequested = true;
+            _reporter?.Warning("Cancellation requested - finishing the files currently being processed...");
+            _buildCts.Cancel();
+        }
+
         private async Task BuildResource(BuildResourceHelper buildHelper)
         {
             switch (_resourceType)
@@ -382,6 +410,9 @@ namespace grzyClothTool.Views
             ProgressValue = 0;
             ConsoleLines.Clear();
             _reporter = new BuildReporter();
+            _buildCts?.Dispose();
+            _buildCts = new CancellationTokenSource();
+            IsCancelRequested = false;
             IsBuilding = true;
             _uiTimer.Start();
 
@@ -400,6 +431,8 @@ namespace grzyClothTool.Views
             await SaveHelper.SaveAsync();
 
             var succeeded = false;
+            var cancelled = false;
+            BuildResourceHelper buildHelper = null;
             // Parallel texture processing allocates many large buffers; avoid blocking full GCs
             // (which pause every worker) while the build runs.
             var previousLatencyMode = GCSettings.LatencyMode;
@@ -408,9 +441,10 @@ namespace grzyClothTool.Views
             {
                 var timer = Stopwatch.StartNew();
 
-                var buildHelper = new BuildResourceHelper(ProjectName, BuildPath, _resourceType, SplitAddons, _reporter);
+                var token = _buildCts.Token;
+                buildHelper = new BuildResourceHelper(ProjectName, BuildPath, _resourceType, SplitAddons, _reporter, cancellationToken: token);
 
-                await Task.Run(() => BuildResource(buildHelper)); // moved out of ui thread, so users don't think tool stopped responding
+                await Task.Run(() => BuildResource(buildHelper), token); // moved out of ui thread, so users don't think tool stopped responding
 
                 timer.Stop();
                 _reporter.Finish();
@@ -418,9 +452,16 @@ namespace grzyClothTool.Views
                 LogHelper.Log($"Build done, elapsed time: {timer.Elapsed}");
                 succeeded = true;
             }
+            catch (OperationCanceledException) when (_buildCts.IsCancellationRequested)
+            {
+                cancelled = true;
+                _reporter.Finish(completed: false);
+                buildHelper?.CleanupAfterCancel();
+                _reporter.Warning($"Build cancelled. Output in {BuildPath} is incomplete - build again before using it.");
+            }
             catch (Exception ex)
             {
-                _reporter.Finish();
+                _reporter.Finish(completed: false);
                 _reporter.Error($"Build failed: {ex.Message}");
                 LogHelper.Log($"Build failed: {ex}", LogType.Error);
             }
@@ -440,10 +481,15 @@ namespace grzyClothTool.Views
                 }
 
                 IsBuilding = false;
+                IsCancelRequested = false;
             }
 
             // The window stays open so the console can be reviewed after the build.
-            if (succeeded)
+            if (cancelled)
+            {
+                StatusPhase = "Build cancelled";
+            }
+            else if (succeeded)
             {
                 StatusPhase = "Build done";
                 CustomMessageBox.Show($"Build done, elapsed time: {_reporter.GetSnapshot().Elapsed}", "Build done", CustomMessageBoxButtons.OpenFolder, BuildPath);
