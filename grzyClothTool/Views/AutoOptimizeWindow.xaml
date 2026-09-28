@@ -200,6 +200,7 @@
                 <Button Content="Select all" Click="SelectAll_Click" Style="{StaticResource ActionButton}"/>
                 <Button Content="Select none" Click="SelectNone_Click" Style="{StaticResource ActionButton}"/>
                 <Button Content="Rescan" Click="Rescan_Click" Style="{StaticResource ActionButton}"/>
+                <Button Content="Generate missing LODs..." Click="GenerateLods_Click" Style="{StaticResource ActionButton}"/>
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">

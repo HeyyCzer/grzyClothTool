@@ -47,6 +47,7 @@
                 <MenuItem Header="_Logs" Tag="Logs" Click="LogsOpen_Click" />
                 <MenuItem Header="_Duplicate Inspector" Tag="DuplicateInspector" Click="DuplicateInspector_Click" />
                 <MenuItem Header="_Performance Optimizer" Tag="PerformanceOptimizer" Click="PerformanceOptimizer_Click" />
+                <MenuItem Header="_LOD Generator" Tag="LodGenerator" Click="LodGenerator_Click" />
             </MenuItem>
 
             <MenuItem Header="" IsEnabled="False">

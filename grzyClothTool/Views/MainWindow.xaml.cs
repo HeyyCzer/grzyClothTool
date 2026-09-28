@@ -694,6 +694,12 @@ namespace grzyClothTool
             optimizer.ShowDialog();
         }
 
+        private void LodGenerator_Click(object sender, RoutedEventArgs e)
+        {
+            var generator = new LodGeneratorWindow();
+            generator.ShowDialog();
+        }
+
         private static void TempFoldersCleanup()
         {
             // At the start of app we can remove temp folders from previous session

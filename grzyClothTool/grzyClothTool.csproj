@@ -46,6 +46,15 @@
     <ProjectReference Include="..\grzyClothTool.Shared\grzyClothTool.Shared.csproj" />
     <ProjectReference Include="..\grzyClothTool.Optimization\grzyClothTool.Optimization.csproj" />
   </ItemGroup>
+  <!-- Sollumz submodule (external/Sollumz), shipped next to the exe as sollumz/ for the "bundled" Sollumz mode of the
+       LOD generator. Without the submodule the app still builds; only the bundled mode is unavailable. -->
+  <ItemGroup>
+    <Content Include="..\external\Sollumz\**\*"
+             Exclude="..\external\Sollumz\.git*;..\external\Sollumz\.git\**;..\external\Sollumz\.github\**;..\external\Sollumz\tests\**;..\external\Sollumz\**\__pycache__\**"
+             LinkBase="sollumz"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <ItemGroup>
     <Reference Include="CodeWalker">
       <HintPath>..\packages\CodeWalker.dll</HintPath>

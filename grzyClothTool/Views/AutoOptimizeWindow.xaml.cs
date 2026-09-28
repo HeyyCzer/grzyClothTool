@@ -31,7 +31,7 @@ namespace grzyClothTool.Views
 
             ManualIssuesTitle.Text = result.ManualIssues.Count == 0
                 ? "No warnings that require manual action"
-                : $"Requires manual action ({result.ManualIssues.Count}) - polygons and LODs can be reduced with grzyOptimizer";
+                : $"Requires manual action ({result.ManualIssues.Count}) - missing LODs can be generated with \"Generate missing LODs\"";
 
             if (result.PendingTextures > 0)
             {
@@ -104,6 +104,13 @@ namespace grzyClothTool.Views
 
             SaveHelper.SetUnsavedChanges(true);
             CustomMessageBox.Show($"{applied} texture(s) will be optimized during resource build.", "Performance Optimizer");
+            Scan();
+        }
+
+        private void GenerateLods_Click(object sender, RoutedEventArgs e)
+        {
+            var generator = new LodGeneratorWindow { Owner = this };
+            generator.ShowDialog();
             Scan();
         }
 

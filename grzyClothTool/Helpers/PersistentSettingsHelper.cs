@@ -96,6 +96,17 @@ public class PersistentSettingsHelper
 
     public string SettingsFilePath => _settingsFilePath;
 
+    /// <summary>Blender/Sollumz choices of the LOD generator. Assign a changed copy to persist it.</summary>
+    public LodGeneratorSettings LodGenerator
+    {
+        get => _settings.LodGenerator ??= new LodGeneratorSettings();
+        set
+        {
+            _settings.LodGenerator = value;
+            SaveSettings();
+        }
+    }
+
     public List<RecentProject> RecentlyOpenedProjects
     {
         get => _settings.RecentlyOpenedProjects ?? new List<RecentProject>();
@@ -155,6 +166,19 @@ public class PersistentSettings
     public bool IsFirstRun { get; set; } = true;
     public string MainProjectsFolder { get; set; } = string.Empty;
     public List<RecentProject> RecentlyOpenedProjects { get; set; } = [];
+    public LodGeneratorSettings LodGenerator { get; set; } = new();
+}
+
+public class LodGeneratorSettings
+{
+    /// <summary>Empty = auto-detect the newest installed Blender on every run.</summary>
+    public string BlenderPath { get; set; } = string.Empty;
+    /// <summary>"installed", "bundled" or "folder" (<see cref="SollumzFolder"/>).</summary>
+    public string SollumzMode { get; set; } = "installed";
+    public string SollumzFolder { get; set; } = string.Empty;
+    public double MediumRatio { get; set; } = 0.5;
+    public double LowRatio { get; set; } = 0.25;
+    public int Workers { get; set; } = 2;
 }
 
 public class RecentProject

@@ -52,6 +52,8 @@ dotnet publish grzyClothTool.Optimizer.Cli -c Release   # single-file self-conta
 
 YDDs with a sibling `.yld` (cloth physics) are skipped. Blender located by `BlenderLocator` or `--blender`; Sollumz is `installed`, `bundled`, or a folder path.
 
+In the app, **View > LOD Generator** (`Views/LodGeneratorWindow`, `Helpers/LodGenerationHelper`) runs the same `LodGenerator` on project drawables missing Med/Low models (drawables with `ClothPhysicsPath` skipped). The result is written to project assets as `{drawable.Id}.ydd` and `FilePath` is repointed, so external projects' originals are never touched. Its Blender/Sollumz choices persist in `PersistentSettingsHelper.LodGenerator` (settings.json); the app also ships the Sollumz submodule as `sollumz/` next to the exe.
+
 ## Conventions
 
 - Commit messages use gitmoji prefixes (`:sparkles:`, `:bug:`, `:zap:`, …).
