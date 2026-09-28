@@ -282,7 +282,7 @@ public static class UpdateHelper
 
     private static async Task DownloadUpdate(string version, CancellationToken cancellationToken)
     {
-        string url = $"https://github.com/grzybeek/grzyClothTool/releases/download/v{version}/grzyClothTool.zip";
+        string url = $"https://github.com/heyyczer/grzyClothTool/releases/download/v{version}/grzyClothTool.zip";
         string downloadZip = Path.Combine(_updateFolder, "grzyClothTool.zip");
 
         try

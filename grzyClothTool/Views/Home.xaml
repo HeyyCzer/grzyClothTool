@@ -280,80 +280,80 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <GroupBox Style="{StaticResource FixedGroupBox}" Header="Explore my other tools" Grid.Column="0" Grid.Row="1" Margin="2">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding OtherTools}" Padding="4">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Button Style="{StaticResource ClickableCardButton}"
-                                               CommandParameter="{Binding Url}"
-                                               Click="OpenToolUrl_Click">
-                                    <Border Style="{StaticResource ToolCardStyle}">
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="*"/>
-                                            </Grid.ColumnDefinitions>
-
-                                            <Border Background="{DynamicResource Brush300}" 
-                                                           CornerRadius="8" 
-                                                           Width="48" 
-                                                           Height="48" 
-                                                           Margin="0,0,14,0"
-                                                           VerticalAlignment="Top"
-                                                           Grid.Column="0">
-                                                <icons:MaterialIcon Kind="Tools" 
-                                                                           Width="28" 
-                                                                           Height="28" 
-                                                                           Foreground="{DynamicResource Brush800}"
-                                                                           HorizontalAlignment="Center"
-                                                                           VerticalAlignment="Center"
-                                                                           UseLayoutRounding="True"/>
-                                            </Border>
-
-                                            <StackPanel Grid.Column="1">
-                                                <TextBlock Text="{Binding Name}" 
-                                                                  FontSize="17" 
-                                                                  FontWeight="Bold" 
-                                                                  Foreground="{DynamicResource Brush900}"
-                                                                  Margin="0,0,0,6"
-                                                                  UseLayoutRounding="True"
-                                                                  TextOptions.TextFormattingMode="Display"/>
-
-                                                <TextBlock Text="{Binding Description}" 
-                                                                  FontSize="13" 
-                                                                  TextWrapping="Wrap" 
-                                                                  Foreground="{DynamicResource Brush700}"
-                                                                  LineHeight="19"
-                                                                  Margin="0,0,0,8"
-                                                                  UseLayoutRounding="True"
-                                                                  TextOptions.TextFormattingMode="Display"/>
-
-                                                <StackPanel Orientation="Horizontal">
-                                                    <icons:MaterialIcon Kind="CursorDefaultClick" 
-                                                                               Width="14" 
-                                                                               Height="14" 
-                                                                               Foreground="{DynamicResource Brush950}"
-                                                                               VerticalAlignment="Center"
-                                                                               Margin="0,0,5,0"
-                                                                               UseLayoutRounding="True"/>
-                                                    <TextBlock Text="Click to learn more" 
-                                                                      FontSize="12" 
-                                                                      FontWeight="Medium"
-                                                                      Foreground="{DynamicResource Brush950}"
-                                                                      VerticalAlignment="Center"
-                                                                      UseLayoutRounding="True"
-                                                                      TextOptions.TextFormattingMode="Display"/>
-                                                </StackPanel>
-                                            </StackPanel>
-                                        </Grid>
-                                    </Border>
-                                </Button>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </GroupBox>
+            <!-- <GroupBox Style="{StaticResource FixedGroupBox}" Header="Explore my other tools" Grid.Column="0" Grid.Row="1" Margin="2"> -->
+            <!--     <ScrollViewer VerticalScrollBarVisibility="Auto"> -->
+            <!--         <ItemsControl ItemsSource="{Binding OtherTools}" Padding="4"> -->
+            <!--             <ItemsControl.ItemTemplate> -->
+            <!--                 <DataTemplate> -->
+            <!--                     <Button Style="{StaticResource ClickableCardButton}" -->
+            <!--                                    CommandParameter="{Binding Url}" -->
+            <!--                                    Click="OpenToolUrl_Click"> -->
+            <!--                         <Border Style="{StaticResource ToolCardStyle}"> -->
+            <!--                             <Grid> -->
+            <!--                                 <Grid.ColumnDefinitions> -->
+            <!--                                     <ColumnDefinition Width="Auto"/> -->
+            <!--                                     <ColumnDefinition Width="*"/> -->
+            <!--                                 </Grid.ColumnDefinitions> -->
+            <!-- -->
+            <!--                                 <Border Background="{DynamicResource Brush300}"  -->
+            <!--                                                CornerRadius="8"  -->
+            <!--                                                Width="48"  -->
+            <!--                                                Height="48"  -->
+            <!--                                                Margin="0,0,14,0" -->
+            <!--                                                VerticalAlignment="Top" -->
+            <!--                                                Grid.Column="0"> -->
+            <!--                                     <icons:MaterialIcon Kind="Tools"  -->
+            <!--                                                                Width="28"  -->
+            <!--                                                                Height="28"  -->
+            <!--                                                                Foreground="{DynamicResource Brush800}" -->
+            <!--                                                                HorizontalAlignment="Center" -->
+            <!--                                                                VerticalAlignment="Center" -->
+            <!--                                                                UseLayoutRounding="True"/> -->
+            <!--                                 </Border> -->
+            <!-- -->
+            <!--                                 <StackPanel Grid.Column="1"> -->
+            <!--                                     <TextBlock Text="{Binding Name}"  -->
+            <!--                                                       FontSize="17"  -->
+            <!--                                                       FontWeight="Bold"  -->
+            <!--                                                       Foreground="{DynamicResource Brush900}" -->
+            <!--                                                       Margin="0,0,0,6" -->
+            <!--                                                       UseLayoutRounding="True" -->
+            <!--                                                       TextOptions.TextFormattingMode="Display"/> -->
+            <!-- -->
+            <!--                                     <TextBlock Text="{Binding Description}"  -->
+            <!--                                                       FontSize="13"  -->
+            <!--                                                       TextWrapping="Wrap"  -->
+            <!--                                                       Foreground="{DynamicResource Brush700}" -->
+            <!--                                                       LineHeight="19" -->
+            <!--                                                       Margin="0,0,0,8" -->
+            <!--                                                       UseLayoutRounding="True" -->
+            <!--                                                       TextOptions.TextFormattingMode="Display"/> -->
+            <!-- -->
+            <!--                                     <StackPanel Orientation="Horizontal"> -->
+            <!--                                         <icons:MaterialIcon Kind="CursorDefaultClick"  -->
+            <!--                                                                    Width="14"  -->
+            <!--                                                                    Height="14"  -->
+            <!--                                                                    Foreground="{DynamicResource Brush950}" -->
+            <!--                                                                    VerticalAlignment="Center" -->
+            <!--                                                                    Margin="0,0,5,0" -->
+            <!--                                                                    UseLayoutRounding="True"/> -->
+            <!--                                         <TextBlock Text="Click to learn more"  -->
+            <!--                                                           FontSize="12"  -->
+            <!--                                                           FontWeight="Medium" -->
+            <!--                                                           Foreground="{DynamicResource Brush950}" -->
+            <!--                                                           VerticalAlignment="Center" -->
+            <!--                                                           UseLayoutRounding="True" -->
+            <!--                                                           TextOptions.TextFormattingMode="Display"/> -->
+            <!--                                     </StackPanel> -->
+            <!--                                 </StackPanel> -->
+            <!--                             </Grid> -->
+            <!--                         </Border> -->
+            <!--                     </Button> -->
+            <!--                 </DataTemplate> -->
+            <!--             </ItemsControl.ItemTemplate> -->
+            <!--         </ItemsControl> -->
+            <!--     </ScrollViewer> -->
+            <!-- </GroupBox> -->
 
             <GroupBox Style="{StaticResource FixedGroupBox}" Header="Did you know?" Grid.Column="0" Grid.Row="0" Margin="2">
                 <TextBlock Text="{Binding RandomDidYouKnow}" FontSize="14" FontStyle="Italic" Padding="5" Margin="5" TextWrapping="WrapWithOverflow"  />
@@ -385,23 +385,23 @@
                 </DockPanel>
             </GroupBox>
 
-            <Grid Grid.Column="1" Grid.RowSpan="4">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-
-                <GroupBox Style="{StaticResource FixedGroupBox}" Header="Supporters" Margin="2" Padding="5" Grid.Row="0">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <ItemsControl ItemsSource="{Binding PatreonList}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding}" Margin="2" FontStyle="Italic" FontSize="14" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
-                </GroupBox>
-            </Grid>
+            <!-- <Grid Grid.Column="1" Grid.RowSpan="4"> -->
+            <!--     <Grid.RowDefinitions> -->
+            <!--         <RowDefinition Height="*" /> -->
+            <!--     </Grid.RowDefinitions> -->
+            <!-- -->
+            <!--     <GroupBox Style="{StaticResource FixedGroupBox}" Header="Supporters" Margin="2" Padding="5" Grid.Row="0"> -->
+            <!--         <ScrollViewer VerticalScrollBarVisibility="Auto"> -->
+            <!--             <ItemsControl ItemsSource="{Binding PatreonList}"> -->
+            <!--                 <ItemsControl.ItemTemplate> -->
+            <!--                     <DataTemplate> -->
+            <!--                         <TextBlock Text="{Binding}" Margin="2" FontStyle="Italic" FontSize="14" /> -->
+            <!--                     </DataTemplate> -->
+            <!--                 </ItemsControl.ItemTemplate> -->
+            <!--             </ItemsControl> -->
+            <!--         </ScrollViewer> -->
+            <!--     </GroupBox> -->
+            <!-- </Grid> -->
         </Grid>
     </Grid>
 </UserControl>

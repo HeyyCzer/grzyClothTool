@@ -169,7 +169,7 @@ namespace grzyClothTool.Views
 
         private async Task FetchLatestRelease()
         {
-            var url = "https://api.github.com/repos/grzybeek/grzyClothTool/releases/latest";
+            var url = "https://api.github.com/repos/heyyczer/grzyClothTool/releases/latest";
 
             App.httpClient.DefaultRequestHeaders.UserAgent.Clear();
             App.httpClient.DefaultRequestHeaders.Add("User-Agent", "grzyClothTool");
