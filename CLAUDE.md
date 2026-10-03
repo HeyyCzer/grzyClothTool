@@ -56,5 +56,6 @@ In the app, **View > LOD Generator** (`Views/LodGeneratorWindow`, `Helpers/LodGe
 
 ## Conventions
 
+- Releases: `./scripts/bump-version.ps1 patch|minor|major [-Push]` bumps `<FileVersion>` in `grzyClothTool.csproj` (the only version the updater reads), commits `:bookmark: vX.Y.Z` and tags. The tag push runs `.github/workflows/release.yml`, which publishes `grzyClothTool.zip` (flat, exe at root — the updater requires that name/layout) and `grzyOptimizer.zip`.
 - Commit messages use gitmoji prefixes (`:sparkles:`, `:bug:`, `:zap:`, …).
 - Newer code (Optimization, CLI, recent helpers) uses file-scoped namespaces, nullable enabled, and explanatory `///` comments on non-obvious behavior; older app code is block-scoped without nullable — match the file you're in.

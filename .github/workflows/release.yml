@@ -1,0 +1,60 @@
+name: Release
+
+# Triggered by scripts/bump-version.ps1 pushing a vX.Y.Z tag.
+# Asset names matter: the in-app updater downloads releases/download/v<version>/grzyClothTool.zip and expects
+# grzyClothTool.exe at the zip root.
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Check tag matches FileVersion
+        run: |
+          $version = '${{ github.ref_name }}'.TrimStart('v')
+          [xml]$proj = Get-Content grzyClothTool/grzyClothTool.csproj
+          $fileVersion = ($proj.Project.PropertyGroup.FileVersion | Where-Object { $_ }) | Select-Object -First 1
+          if ($fileVersion -ne $version) {
+            throw "Tag ${{ github.ref_name }} does not match <FileVersion>$fileVersion</FileVersion>"
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      # CodeWalker builds into packages/, which every other project references via HintPath.
+      - name: Build CodeWalker
+        run: dotnet build CodeWalker/CodeWalker/CodeWalker.csproj -c Release
+
+      - name: Publish app
+        run: dotnet publish grzyClothTool/grzyClothTool.csproj -c Release -r win-x64 -o out/app
+
+      - name: Publish optimizer CLI
+        run: dotnet publish grzyClothTool.Optimizer.Cli/grzyClothTool.Optimizer.Cli.csproj -c Release -r win-x64 -o out/cli
+
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path out/app/* -DestinationPath dist/grzyClothTool.zip
+          Compress-Archive -Path out/cli/* -DestinationPath dist/grzyOptimizer.zip
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create '${{ github.ref_name }}' dist/grzyClothTool.zip dist/grzyOptimizer.zip `
+            --title "v$env:VERSION" --generate-notes --verify-tag
