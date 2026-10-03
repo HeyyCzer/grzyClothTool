@@ -481,6 +481,53 @@ namespace CodeWalker.GameFiles
             }
         }
 
+        /// <summary>
+        /// Decompresses a resource whose decompressed size is known up front (RSC7 header: system + graphics
+        /// size), straight into an exactly sized buffer. Avoids the doubling MemoryStream growth and the final
+        /// copy of <see cref="Decompress(byte[])"/>, which for a 4K texture dictionary meant ~3x its size in
+        /// short-lived large object heap arrays.
+        /// </summary>
+        public static byte[] Decompress(byte[] data, int expectedSize)
+        {
+            if (expectedSize <= 0) return Decompress(data);
+
+            using (var ms = new MemoryStream(data))
+            using (var ds = new DeflateStream(ms, CompressionMode.Decompress))
+            {
+                var outbuf = new byte[expectedSize];
+                int total = 0;
+                int read;
+                while (total < outbuf.Length && (read = ds.Read(outbuf, total, outbuf.Length - total)) > 0)
+                {
+                    total += read;
+                }
+
+                if (total == outbuf.Length)
+                {
+                    var probe = new byte[1];
+                    if (ds.Read(probe, 0, 1) == 0) return outbuf;
+
+                    // Header lied (bigger than announced): fall back to growing the buffer.
+                    using (var rest = new MemoryStream())
+                    {
+                        rest.Write(outbuf, 0, total);
+                        rest.WriteByte(probe[0]);
+                        ds.CopyTo(rest);
+                        return rest.ToArray();
+                    }
+                }
+
+                Array.Resize(ref outbuf, total);
+                return outbuf;
+            }
+        }
+
+        public static Task<byte[]> DecompressAsync(byte[] data, int expectedSize)
+        {
+            if (expectedSize <= 0) return DecompressAsync(data);
+            return Task.Run(() => Decompress(data, expectedSize));
+        }
+
         public static async Task<byte[]> DecompressAsync(byte[] data)
         {
             using (MemoryStream ms = new MemoryStream(data))

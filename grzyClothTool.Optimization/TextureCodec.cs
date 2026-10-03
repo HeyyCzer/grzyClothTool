@@ -17,6 +17,171 @@ public static class TextureCodec
         TryReadUncompressedPixels(texture) ?? new MagickImage(DDSIO.GetDDSFile(texture));
 
     /// <summary>
+    /// Decodes the smallest mip level that is still at least <paramref name="minSize"/> pixels on its longer
+    /// side, for previews and thumbnails. A 90px thumbnail of a 4096² texture then decodes a 128² mip (~16 KB)
+    /// instead of the full 64 MB image plus its DDS copies. Falls back to the top level when the texture has
+    /// no usable mips or an unknown format.
+    /// </summary>
+    public static MagickImage DecodePreview(Texture texture, int minSize)
+    {
+        int level = PickPreviewLevel(texture, minSize);
+        var small = level > 0 ? TryExtractMip(texture, level) : TrySampleTopLevel(texture, minSize);
+        return Decode(small ?? texture);
+    }
+
+    /// <summary>
+    /// For textures without (usable) mips: builds a smaller texture by taking every n-th 4x4 block (block
+    /// formats) or pixel (uncompressed) of the top level, so a preview doesn't decode e.g. a full 4096² DXT1
+    /// (~1s in ImageMagick). Nearest-neighbour quality, fine for thumbnails. Returns null when the texture is
+    /// already small enough or the format/layout isn't handled.
+    /// </summary>
+    public static Texture? TrySampleTopLevel(Texture texture, int minSize)
+    {
+        var data = texture.Data?.FullData;
+        int width = texture.Width;
+        int height = texture.Height;
+        int step = Math.Max(width, height) / Math.Max(1, minSize);
+        if (data == null || step < 2)
+        {
+            return null;
+        }
+
+        if (GetLevelSize(texture.Format, width, height, out int tightPitch) <= 0)
+        {
+            return null;
+        }
+
+        bool blockCompressed = IsBlockCompressed(texture.Format.ToString());
+        int unit = blockCompressed ? 4 : 1; // pixels per sampled unit along each axis
+        int unitsWide = (width + unit - 1) / unit;
+        int unitsHigh = (height + unit - 1) / unit;
+        int unitBytes = tightPitch / unitsWide;
+        // Uncompressed rows may be padded (Stride); block rows are tightly packed.
+        int rowPitch = !blockCompressed && texture.Stride > tightPitch ? texture.Stride : tightPitch;
+        if ((long)rowPitch * unitsHigh > data.Length)
+        {
+            return null;
+        }
+        int outUnitsWide = Math.Max(1, unitsWide / step);
+        int outUnitsHigh = Math.Max(1, unitsHigh / step);
+
+        var pixels = new byte[outUnitsWide * outUnitsHigh * unitBytes];
+        for (int y = 0; y < outUnitsHigh; y++)
+        {
+            int srcRow = y * step * rowPitch;
+            for (int x = 0; x < outUnitsWide; x++)
+            {
+                Buffer.BlockCopy(data, srcRow + x * step * unitBytes, pixels, (y * outUnitsWide + x) * unitBytes, unitBytes);
+            }
+        }
+
+        return new Texture
+        {
+            Name = texture.Name,
+            NameHash = texture.NameHash,
+            Width = (ushort)(outUnitsWide * unit),
+            Height = (ushort)(outUnitsHigh * unit),
+            Depth = 1,
+            Stride = (ushort)(outUnitsWide * unitBytes),
+            Format = texture.Format,
+            Levels = 1,
+            Data = new TextureData { FullData = pixels },
+        };
+    }
+
+    public static int PickPreviewLevel(Texture texture, int minSize)
+    {
+        int level = 0;
+        bool blockCompressed = IsBlockCompressed(texture.Format.ToString());
+        while (level + 1 < texture.Levels)
+        {
+            int w = texture.Width >> (level + 1);
+            int h = texture.Height >> (level + 1);
+            if (Math.Max(w, h) < minSize || (blockCompressed && (w < 4 || h < 4)))
+            {
+                break;
+            }
+            level++;
+        }
+        return level;
+    }
+
+    /// <summary>
+    /// Returns a single-level texture holding mip <paramref name="level"/> of <paramref name="texture"/>, or null
+    /// for level 0 / unsupported formats / truncated data. Mips are stored tightly packed one after another,
+    /// the same layout DDSIO reads.
+    /// </summary>
+    public static Texture? TryExtractMip(Texture texture, int level)
+    {
+        var data = texture.Data?.FullData;
+        if (level <= 0 || level >= texture.Levels || data == null)
+        {
+            return null;
+        }
+
+        int offset = 0;
+        for (int i = 0; i < level; i++)
+        {
+            int size = GetLevelSize(texture.Format, texture.Width >> i, texture.Height >> i, out _);
+            if (size <= 0) return null;
+            offset += size;
+        }
+
+        int width = texture.Width >> level;
+        int height = texture.Height >> level;
+        int levelSize = GetLevelSize(texture.Format, width, height, out int rowPitch);
+        if (levelSize <= 0 || offset + levelSize > data.Length)
+        {
+            return null;
+        }
+
+        var pixels = new byte[levelSize];
+        Buffer.BlockCopy(data, offset, pixels, 0, levelSize);
+        return new Texture
+        {
+            Name = texture.Name,
+            NameHash = texture.NameHash,
+            Width = (ushort)width,
+            Height = (ushort)height,
+            Depth = 1,
+            Stride = (ushort)rowPitch,
+            Format = texture.Format,
+            Levels = 1,
+            Data = new TextureData { FullData = pixels },
+        };
+    }
+
+    private static int GetLevelSize(TextureFormat format, int width, int height, out int rowPitch)
+    {
+        width = Math.Max(1, width);
+        height = Math.Max(1, height);
+
+        int blockBytes = format switch
+        {
+            TextureFormat.D3DFMT_DXT1 or TextureFormat.D3DFMT_ATI1 => 8,
+            TextureFormat.D3DFMT_DXT3 or TextureFormat.D3DFMT_DXT5 or TextureFormat.D3DFMT_ATI2 or TextureFormat.D3DFMT_BC7 => 16,
+            _ => 0
+        };
+        if (blockBytes > 0)
+        {
+            int blocksWide = Math.Max(1, (width + 3) / 4);
+            int blocksHigh = Math.Max(1, (height + 3) / 4);
+            rowPitch = blocksWide * blockBytes;
+            return rowPitch * blocksHigh;
+        }
+
+        int bytesPerPixel = format switch
+        {
+            TextureFormat.D3DFMT_A8R8G8B8 or TextureFormat.D3DFMT_X8R8G8B8 or TextureFormat.D3DFMT_A8B8G8R8 => 4,
+            TextureFormat.D3DFMT_A1R5G5B5 => 2,
+            TextureFormat.D3DFMT_A8 or TextureFormat.D3DFMT_L8 => 1,
+            _ => 0
+        };
+        rowPitch = width * bytesPerPixel;
+        return rowPitch * height;
+    }
+
+    /// <summary>
     /// Reads the top mip level of an uncompressed texture straight from its pixel data, skipping the
     /// DDS container copy and DDS decoding. ImageMagick's DDS reader also ignores the channel masks of
     /// A8B8G8R8 (swapping red and blue), which this path gets right. Returns null for formats/layouts

@@ -209,6 +209,86 @@ public class FileHelperTests
         }
     }
 
+    [Fact]
+    public void IsUnchangedSinceLoadedSave_ComparesWithSaveFileWriteTime()
+    {
+        using var temp = new TestTempDirectory();
+        var older = temp.FilePath("older.ytd");
+        var newer = temp.FilePath("newer.ytd");
+        var saveFilePath = temp.FilePath(SaveHelper.AutoSaveFileName);
+        Touch(older);
+        Touch(saveFilePath);
+        Touch(newer);
+        File.SetLastWriteTimeUtc(older, DateTime.UtcNow.AddMinutes(-2));
+        File.SetLastWriteTimeUtc(saveFilePath, DateTime.UtcNow.AddMinutes(-1));
+
+        Assert.False(FileHelper.IsUnchangedSinceLoadedSave(older)); // outside of a load
+
+        FileHelper.SetLoadContext(saveFilePath);
+        try
+        {
+            Assert.True(FileHelper.IsUnchangedSinceLoadedSave(older));
+            Assert.False(FileHelper.IsUnchangedSinceLoadedSave(newer));
+            Assert.False(FileHelper.IsUnchangedSinceLoadedSave(temp.FilePath("missing.ytd")));
+        }
+        finally
+        {
+            FileHelper.ClearLoadContext();
+        }
+    }
+
+    [Fact]
+    public void LoadingSave_ReusesStoredDetailsOfUnchangedFiles()
+    {
+        using var temp = new TestTempDirectory();
+        var ytdPath = temp.FilePath("texture.ytd");
+        var yddPath = temp.FilePath("drawable.ydd");
+        var saveFilePath = temp.FilePath(SaveHelper.AutoSaveFileName);
+        Touch(ytdPath); // not valid files: reusing the details means they are never read
+        Touch(yddPath);
+        Touch(saveFilePath);
+        File.SetLastWriteTimeUtc(ytdPath, DateTime.UtcNow.AddMinutes(-2));
+        File.SetLastWriteTimeUtc(yddPath, DateTime.UtcNow.AddMinutes(-2));
+
+        var json = $$"""
+        {
+          "Id": "{{Guid.NewGuid()}}", "FilePath": {{System.Text.Json.JsonSerializer.Serialize(yddPath)}},
+          "Sex": 0, "IsProp": false, "TypeNumeric": 11, "Number": 0, "HasSkin": false, "IsLoading": true,
+          "Details": {
+            "AllModels": { "High": { "PolyCount": 4242 }, "Med": null, "Low": null },
+            "EmbeddedTextures": {
+              "Specular": { "OriginalName": "specular", "HasOriginalTexture": true, "SourceDrawablePath": "C:\\moved\\away.ydd",
+                            "Details": { "Width": 512, "Height": 512, "MipMapCount": 10, "Compression": "D3DFMT_DXT1", "Name": "specular", "Type": "Specular" } }
+            }
+          },
+          "Textures": [{
+            "Id": "{{Guid.NewGuid()}}", "FilePath": {{System.Text.Json.JsonSerializer.Serialize(ytdPath)}},
+            "TypeNumeric": 11, "Number": 0, "TxtNumber": 0, "HasSkin": false, "IsProp": false, "IsLoading": true,
+            "TxtDetails": { "Width": 1234, "Height": 1234, "MipMapCount": 1, "Compression": "D3DFMT_DXT5", "Name": "t", "Type": "diffuse" }
+          }]
+        }
+        """;
+
+        FileHelper.SetLoadContext(saveFilePath);
+        grzyClothTool.Models.Drawable.GDrawable drawable;
+        try
+        {
+            drawable = System.Text.Json.JsonSerializer.Deserialize<grzyClothTool.Models.Drawable.GDrawable>(json, SaveHelper.SerializerOptions)!;
+        }
+        finally
+        {
+            FileHelper.ClearLoadContext();
+        }
+
+        Assert.False(drawable.IsLoading);
+        Assert.Equal(4242, drawable.Details.AllModels[grzyClothTool.Models.Drawable.GDrawableDetails.DetailLevel.High]!.PolyCount);
+        Assert.Equal(yddPath, drawable.Details.EmbeddedTextures[grzyClothTool.Models.Drawable.GDrawableDetails.EmbeddedTextureType.Specular]!.SourceDrawablePath);
+
+        var texture = Assert.Single(drawable.Textures);
+        Assert.False(texture.IsLoading);
+        Assert.Equal(1234, texture.TxtDetails.Width);
+    }
+
     private static void Touch(string path)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);

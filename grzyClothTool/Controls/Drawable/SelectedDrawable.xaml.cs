@@ -175,34 +175,19 @@ namespace grzyClothTool.Controls
                 var textureListBox = FindTextureListBox(this);
                 textureListBox.SelectedIndex = gtxt.TxtNumber;
 
-                MagickImage img = ImgHelper.GetImage(gtxt.FullFilePath);
+                // The popup is 400x300, so a mip of at least PreviewPopupSize is plenty (decoding the full
+                // 4K top level allocated ~200 MB per hover).
+                using MagickImage img = ImgHelper.GetPreviewImage(gtxt.FullFilePath, PreviewPopupSize);
                 if (img == null)
                 {
                     return;
                 }
 
-                int w = (int)img.Width;
-                int h = (int)img.Height;
-                byte[] pixels = img.ToByteArray(MagickFormat.Bgra);
-
-                Bitmap bitmap = new(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                BitmapData bitmapData = bitmap.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, bitmap.PixelFormat);
-                Marshal.Copy(pixels, 0, bitmapData.Scan0, pixels.Length);
-                bitmap.UnlockBits(bitmapData);
+                int w = gtxt.TxtDetails?.Width > 0 ? gtxt.TxtDetails.Width : (int)img.Width;
+                int h = gtxt.TxtDetails?.Height > 0 ? gtxt.TxtDetails.Height : (int)img.Height;
 
                 System.Windows.Controls.Image imageControl = new() { Stretch = Stretch.Uniform, Width = 400, Height = 300 };
-                BitmapSource bitmapSource = BitmapSource.Create(
-                    bitmap.Width,
-                    bitmap.Height,
-                    bitmap.HorizontalResolution,
-                    bitmap.VerticalResolution,
-                    PixelFormats.Bgra32,
-                    null,
-                    pixels,
-                    bitmap.Width * 4
-                );
-
-                imageControl.Source = bitmapSource;
+                imageControl.Source = ImgHelper.ToBitmapSource(img);
 
                 TextBlock textBlock = new()
                 {
@@ -240,11 +225,6 @@ namespace grzyClothTool.Controls
                 {
                     popup.IsOpen = false;
                 };
-
-                popup.Closed += (s, args) =>
-                {
-                    bitmap.Dispose();
-                };
             }
             catch (Exception ex)
             {
@@ -252,6 +232,8 @@ namespace grzyClothTool.Controls
             }
 
         }
+
+        private const int PreviewPopupSize = 512;
 
         private async void EmbeddedTexturePreview_Click(object sender, RoutedEventArgs e)
         {
@@ -262,36 +244,18 @@ namespace grzyClothTool.Controls
                 if (btn.DataContext is not GTextureEmbedded embeddedTexture)
                     return;
 
-                await embeddedTexture.EnsureTextureDataLoadedAsync();
-
-                var textureData = embeddedTexture.DisplayTextureData;
+                // Not cached on the model: keeping it would hold every previewed texture's full data.
+                var textureData = await embeddedTexture.LoadDisplayTextureAsync();
                 if (textureData?.Data?.FullData == null || textureData.Data.FullData.Length == 0)
                     return;
 
-                var dds = DDSIO.GetDDSFile(textureData);
-                using MagickImage img = new(dds);
-                
-                int w = (int)img.Width;
-                int h = (int)img.Height;
-                byte[] pixels = img.ToByteArray(MagickFormat.Bgra);
+                using MagickImage img = grzyClothTool.Optimization.TextureCodec.DecodePreview(textureData, PreviewPopupSize);
 
-                Bitmap bitmap = new(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                BitmapData bitmapData = bitmap.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, bitmap.PixelFormat);
-                Marshal.Copy(pixels, 0, bitmapData.Scan0, pixels.Length);
-                bitmap.UnlockBits(bitmapData);
+                int w = textureData.Width;
+                int h = textureData.Height;
 
                 System.Windows.Controls.Image imageControl = new() { Stretch = Stretch.Uniform, Width = 400, Height = 300 };
-                BitmapSource bitmapSource = BitmapSource.Create(
-                    bitmap.Width,
-                    bitmap.Height,
-                    96, 96,
-                    PixelFormats.Bgra32,
-                    null,
-                    pixels,
-                    bitmap.Width * 4
-                );
-
-                imageControl.Source = bitmapSource;
+                imageControl.Source = ImgHelper.ToBitmapSource(img);
 
                 var statusText = embeddedTexture.HasReplacement ? " - REPLACEMENT" : " - Embedded";
                 TextBlock textBlock = new()
@@ -328,11 +292,6 @@ namespace grzyClothTool.Controls
                 popup.MouseMove += (s, args) =>
                 {
                     popup.IsOpen = false;
-                };
-
-                popup.Closed += (s, args) =>
-                {
-                    bitmap.Dispose();
                 };
             }
             catch (Exception ex)
@@ -1322,6 +1281,21 @@ namespace grzyClothTool.Controls
                     Name = embeddedTexture.Details.Name,
                     IsOptimizeNeeded = embeddedTexture.Details.IsOptimizeNeeded,
                     IsOptimizeNeededTooltip = embeddedTexture.Details.IsOptimizeNeededTooltip
+                };
+            }
+            else if (embeddedTexture.HasOriginalTexture || embeddedTexture.HasReplacement)
+            {
+                // Restored from the save file without texture data loaded: Details describe the same texture.
+                var d = embeddedTexture.Details;
+                embeddedTexture.OptimizeDetails = new GTextureDetails
+                {
+                    Width = d.Width,
+                    Height = d.Height,
+                    MipMapCount = d.MipMapCount,
+                    Compression = d.Compression,
+                    Name = d.Name,
+                    IsOptimizeNeeded = d.IsOptimizeNeeded,
+                    IsOptimizeNeededTooltip = d.IsOptimizeNeededTooltip
                 };
             }
 

@@ -28,12 +28,43 @@ public static class FileHelper
     private static string? _loadContextProjectFolder = null;
 
     /// <summary>
+    /// Last write time of the save file being deserialized (null outside of loading).
+    /// </summary>
+    private static DateTime? _loadContextSaveTimeUtc = null;
+
+    /// <summary>
+    /// True while a save file is being loaded and <paramref name="fullPath"/> exists and was not modified after
+    /// that save was written. The details stored in the save (texture size/format, poly counts, embedded
+    /// textures) then still describe the file, so it doesn't have to be re-read and decompressed - for big
+    /// projects that was GBs of .ytd/.ydd on every open.
+    /// </summary>
+    public static bool IsUnchangedSinceLoadedSave(string? fullPath)
+    {
+        if (_loadContextSaveTimeUtc is not DateTime saveTime || string.IsNullOrEmpty(fullPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            var info = new FileInfo(fullPath);
+            return info.Exists && info.LastWriteTimeUtc <= saveTime;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Sets the project folder context for file path resolution during loading
     /// </summary>
     public static void SetLoadContext(string saveFilePath)
     {
         try
         {
+            _loadContextSaveTimeUtc = File.Exists(saveFilePath) ? File.GetLastWriteTimeUtc(saveFilePath) : null;
+
             // Extract project folder from save file path
             // Expected: MainProjectsFolder\ProjectName\autosave.json
             var saveFileDir = Path.GetDirectoryName(saveFilePath);
@@ -45,6 +76,7 @@ public static class FileHelper
         catch
         {
             _loadContextProjectFolder = null;
+            _loadContextSaveTimeUtc = null;
         }
     }
 
@@ -54,6 +86,7 @@ public static class FileHelper
     public static void ClearLoadContext()
     {
         _loadContextProjectFolder = null;
+        _loadContextSaveTimeUtc = null;
     }
     public static string ReservedAssetsPath { get; private set; }
 

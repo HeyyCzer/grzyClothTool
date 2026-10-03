@@ -2,20 +2,16 @@ using CodeWalker.GameFiles;
 using CodeWalker.Utils;
 using grzyClothTool.Helpers;
 using grzyClothTool.Views;
+using grzyClothTool.Optimization;
 using ImageMagick;
 using System;
 using System.ComponentModel;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
 namespace grzyClothTool.Models.Texture;
@@ -111,7 +107,14 @@ public class GTextureEmbedded : INotifyPropertyChanged
         }
     }
 
-    public bool IsPreviewDisabled => DisplayTextureData?.Data?.FullData == null || DisplayTextureData.Data.FullData.Length == 0;
+    /// <summary>
+    /// Set once a thumbnail was decoded. The thumbnail no longer keeps the full texture data in memory
+    /// (that held every viewed embedded texture with all its mips for the whole session), so this is what
+    /// tells the UI the texture can be previewed.
+    /// </summary>
+    private bool _hasPreviewableData;
+
+    public bool IsPreviewDisabled => !_hasPreviewableData && (DisplayTextureData?.Data?.FullData == null || DisplayTextureData.Data.FullData.Length == 0);
 
     [JsonIgnore]
     public string PreviewDisabledTooltip => IsPreviewDisabled ? "Encrypted drawable" : string.Empty;
@@ -203,18 +206,7 @@ public class GTextureEmbedded : INotifyPropertyChanged
                 return true;
             }
 
-            var fileBytes = await FileHelper.ReadAllBytesAsync(SourceDrawablePath);
-            var yddFile = new YddFile();
-            await yddFile.LoadAsync(fileBytes);
-
-            var texture = yddFile.Drawables?
-                .FirstOrDefault()?
-                .ShaderGroup?
-                .TextureDictionary?
-                .Textures?
-                .data_items?
-                .FirstOrDefault(x => x?.Name == OriginalName);
-
+            var texture = await ReadOriginalTextureAsync();
             if (texture == null)
             {
                 return false;
@@ -234,6 +226,53 @@ public class GTextureEmbedded : INotifyPropertyChanged
         {
             _textureDataSemaphore.Release();
         }
+    }
+
+    /// <summary>
+    /// Returns the texture to display (replacement, or the original read from the source drawable) without
+    /// keeping the original's pixel data on this object - use for thumbnails/previews that only need it once.
+    /// </summary>
+    public async Task<CodeWalker.GameFiles.Texture?> LoadDisplayTextureAsync()
+    {
+        if (DisplayTextureData?.Data?.FullData?.Length > 0)
+        {
+            return DisplayTextureData;
+        }
+
+        if (!string.IsNullOrEmpty(ReplacementFilePath) && await Task.Run(EnsureReplacementLoaded))
+        {
+            return _replacementTextureData;
+        }
+
+        if (!HasOriginalTexture || string.IsNullOrWhiteSpace(SourceDrawablePath) || !File.Exists(SourceDrawablePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await ReadOriginalTextureAsync();
+        }
+        catch (Exception ex)
+        {
+            LogHelper.Log($"Could not load embedded texture data for {Details.Name}: {ex.Message}", LogType.Warning);
+            return null;
+        }
+    }
+
+    private async Task<CodeWalker.GameFiles.Texture?> ReadOriginalTextureAsync()
+    {
+        var fileBytes = await FileHelper.ReadAllBytesAsync(SourceDrawablePath!);
+        var yddFile = new YddFile();
+        await yddFile.LoadAsync(fileBytes);
+
+        return yddFile.Drawables?
+            .FirstOrDefault()?
+            .ShaderGroup?
+            .TextureDictionary?
+            .Textures?
+            .data_items?
+            .FirstOrDefault(x => x?.Name == OriginalName);
     }
 
     public void SetReplacementTexture(CodeWalker.GameFiles.Texture newTexture, string? replacementFilePath = null)
@@ -312,78 +351,59 @@ public class GTextureEmbedded : INotifyPropertyChanged
 
     public void RenameTexture(string newName)
     {
-        if (string.IsNullOrWhiteSpace(newName) || DisplayTextureData == null)
+        // Embedded textures restored from the save file carry no TextureData until loaded, so check the flags.
+        if (string.IsNullOrWhiteSpace(newName) || (!HasOriginalTexture && !HasReplacement))
             return;
 
         Details.Name = newName;
         OnPropertyChanged(nameof(Details));
     }
 
+    private bool _isThumbnailLoading;
+
     public async void LoadThumbnailAsync()
     {
-        if (ImageThumbnail != null)
+        if (ImageThumbnail != null || _isThumbnailLoading)
             return;
 
+        _isThumbnailLoading = true;
         IsLoading = true;
 
-        await Task.Delay(Random.Shared.Next(25, 100));
-        await Task.Run(() =>
+        await ImgHelper.PreviewDecodeGate.WaitAsync();
+        try
         {
-            try
+            var thumbnail = await Task.Run(async () =>
             {
-                // Prefer a persisted replacement (rebuilt from ReplacementFilePath after a reload)
+                // Prefers a persisted replacement (rebuilt from ReplacementFilePath after a reload)
                 // so the thumbnail shows the replacement, not the original.
-                EnsureReplacementLoaded();
-
-                if (!EnsureTextureDataLoadedAsync().GetAwaiter().GetResult())
-                    return;
-
-                var textureData = DisplayTextureData;
+                var textureData = await LoadDisplayTextureAsync();
                 if (textureData?.Data?.FullData == null || textureData.Data.FullData.Length == 0)
-                    return;
+                    return null;
 
-                var dds = DDSIO.GetDDSFile(textureData);
-                using var img = new MagickImage(dds);
-                
-                img.Resize(90, 90);
-                int w = (int)img.Width;
-                int h = (int)img.Height;
-                byte[] pixels = img.ToByteArray(MagickFormat.Bgra);
+                using var img = TextureCodec.DecodePreview(textureData, GTexture.ThumbnailSize);
+                img.Resize(GTexture.ThumbnailSize, GTexture.ThumbnailSize);
+                return ImgHelper.ToBitmapSource(img);
+            });
 
-                using Bitmap bitmap = new(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                BitmapData bitmapData = bitmap.LockBits(
-                    new Rectangle(0, 0, w, h),
-                    ImageLockMode.WriteOnly,
-                    bitmap.PixelFormat);
-
-                Marshal.Copy(pixels, 0, bitmapData.Scan0, pixels.Length);
-                bitmap.UnlockBits(bitmapData);
-
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    var source = BitmapSource.Create(
-                        bitmap.Width,
-                        bitmap.Height,
-                        96, 96,
-                        PixelFormats.Bgra32,
-                        null,
-                        pixels,
-                        bitmap.Width * 4
-                    );
-                    source.Freeze();
-                    ImageThumbnail = source;
-                });
-            }
-            catch (Exception ex)
+            if (thumbnail != null)
             {
-                Console.WriteLine($"Embedded texture thumbnail generation failed: {ex.Message}");
-                LogHelper.Log($"Could not generate embedded texture thumbnail for {Details.Name}");
+                _hasPreviewableData = true;
+                ImageThumbnail = thumbnail;
+                OnPropertyChanged(nameof(IsPreviewDisabled));
+                OnPropertyChanged(nameof(PreviewDisabledTooltip));
             }
-            finally
-            {
-                IsLoading = false;
-            }
-        });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Embedded texture thumbnail generation failed: {ex.Message}");
+            LogHelper.Log($"Could not generate embedded texture thumbnail for {Details.Name}");
+        }
+        finally
+        {
+            ImgHelper.PreviewDecodeGate.Release();
+            _isThumbnailLoading = false;
+            IsLoading = false;
+        }
     }
 
     protected void OnPropertyChanged([CallerMemberName] string? name = null)

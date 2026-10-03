@@ -38,11 +38,41 @@ namespace CodeWalker.Rendering
         private System.Drawing.Size beginSize;
         private ViewportF Viewport;
         private bool autoStartLoop = false;
+        private IntPtr formHandle = IntPtr.Zero; //cached on the UI thread, Form.Handle can't be read from the render thread
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool IsIconic(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool IsWindowVisible(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr GetAncestor(IntPtr hWnd, uint gaFlags);
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr GetForegroundWindow();
+        private const uint GA_ROOT = 2;
+
+        /// <summary>
+        /// The form is hosted inside another window (WPF WindowsFormsHost), so its own WindowState never
+        /// becomes Minimized and Form.ActiveForm is always null. Check the real top-level window instead.
+        /// </summary>
+        private bool IsHostHiddenOrMinimized()
+        {
+            if (formHandle == IntPtr.Zero) return dxform.Form.WindowState == FormWindowState.Minimized;
+            if (!IsWindowVisible(formHandle)) return true;
+            var root = GetAncestor(formHandle, GA_ROOT);
+            return root != IntPtr.Zero && IsIconic(root);
+        }
+        private bool IsHostInactive()
+        {
+            if (formHandle == IntPtr.Zero) return Form.ActiveForm == null;
+            var root = GetAncestor(formHandle, GA_ROOT);
+            return GetForegroundWindow() != root;
+        }
 
         public bool Init(DXForm form, bool autostart = true)
         {
             dxform = form;
             autoStartLoop = autostart;
+            formHandle = form.Form.Handle;
 
             try
             {
@@ -283,12 +313,12 @@ namespace CodeWalker.Rendering
                 {
                     swapchain.Present(1, PresentFlags.None); //just flip buffers when resizing; don't draw
                 }
-                while (dxform.Form.WindowState == FormWindowState.Minimized)
+                while (IsHostHiddenOrMinimized())
                 {
-                    Thread.Sleep(10); //don't hog CPU when minimised
-                    if (dxform.Form.IsDisposed) return; //if closed while minimised
+                    Thread.Sleep(50); //don't hog CPU/GPU when minimised or the preview panel is hidden
+                    if (!Running || dxform.Form.IsDisposed) return; //if closed while minimised
                 }
-                if (Form.ActiveForm == null)
+                if (IsHostInactive())
                 {
                     Thread.Sleep(20); //reduce the FPS when the app isn't active (maybe this should be configurable?)
                     if (context.IsDisposed) return; //if form closed while sleeping (eg from rightclick on taskbar)

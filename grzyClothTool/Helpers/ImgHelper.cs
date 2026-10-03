@@ -4,7 +4,10 @@ using grzyClothTool.Optimization;
 using ImageMagick;
 using System;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace grzyClothTool.Helpers;
 
@@ -41,6 +44,55 @@ public static class ImgHelper
             TelemetryHelper.CaptureExceptionWithAttachment(e, path);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Limits how many texture previews/thumbnails decode at once. Selecting a drawable queues one per texture
+    /// and each still has to load and decompress its whole .ytd, so running them all in parallel spiked memory.
+    /// </summary>
+    public static readonly SemaphoreSlim PreviewDecodeGate = new(2);
+
+    /// <summary>
+    /// Like <see cref="GetImage"/>, but for display only: .ytd/.dds textures decode the smallest mip that is
+    /// still at least <paramref name="minSize"/> px instead of the full-resolution top level.
+    /// </summary>
+    public static MagickImage? GetPreviewImage(string path, int minSize)
+    {
+        string ext = Path.GetExtension(path);
+        if (ext == ".ytd")
+        {
+            var ytd = CWHelper.GetYtdFile(path);
+            return ytd.TextureDict.Textures.Count == 0 ? null : TextureCodec.DecodePreview(ytd.TextureDict.Textures[0], minSize);
+        }
+
+        if (ext == ".dds")
+        {
+            try
+            {
+                var texture = CodeWalker.Utils.DDSIO.GetTexture(File.ReadAllBytes(path));
+                if (texture != null)
+                {
+                    return TextureCodec.DecodePreview(texture, minSize);
+                }
+            }
+            catch
+            {
+                // Partially supported DDS files: let ImageMagick read them below.
+            }
+        }
+
+        return GetImage(path);
+    }
+
+    /// <summary>Copies the image's pixels into a frozen (cross-thread usable) BGRA bitmap.</summary>
+    public static BitmapSource ToBitmapSource(MagickImage img)
+    {
+        int w = (int)img.Width;
+        int h = (int)img.Height;
+        byte[] pixels = img.ToByteArray(MagickFormat.Bgra);
+        var source = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, pixels, w * 4);
+        source.Freeze();
+        return source;
     }
 
     public static int GetCorrectMipMapAmount(int width, int height) => TextureRules.GetCorrectMipMapAmount(width, height);

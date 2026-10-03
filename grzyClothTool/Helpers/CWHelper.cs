@@ -93,8 +93,8 @@ public static class CWHelper
             _ => throw new NotSupportedException($"Unsupported file extension: {texture.Extension}"),
         };
 
-        RpfFileEntry rpf = RpfFile.CreateResourceFileEntry(ref data, 0);
-        var decompressedData = ResourceBuilder.Decompress(data);
+        var rpf = RpfFile.CreateResourceFileEntry(ref data, 0);
+        var decompressedData = ResourceBuilder.Decompress(data, rpf.SystemSize + rpf.GraphicsSize);
         YtdFile ytd = RpfFile.GetFile<YtdFile>(rpf, decompressedData);
         ytd.Name = Path.GetFileNameWithoutExtension(name);
 
@@ -107,8 +107,8 @@ public static class CWHelper
         {
             byte[] data = File.ReadAllBytes(d.FullFilePath);
 
-            RpfFileEntry rpf = RpfFile.CreateResourceFileEntry(ref data, 0);
-            var decompressedData = ResourceBuilder.Decompress(data);
+            var rpf = RpfFile.CreateResourceFileEntry(ref data, 0);
+            var decompressedData = ResourceBuilder.Decompress(data, rpf.SystemSize + rpf.GraphicsSize);
             YddFile ydd = RpfFile.GetFile<YddFile>(rpf, decompressedData);
             var drawable = ydd.Drawables.First();
             drawable.Name = Path.GetFileNameWithoutExtension(d.Name);
