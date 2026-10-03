@@ -260,7 +260,7 @@ public static class UpdateHelper
     {
         try
         {
-            string url = "https://raw.githubusercontent.com/grzybeek/grzyClothTool/master/grzyClothTool/grzyClothTool.csproj";
+            string url = "https://raw.githubusercontent.com/heyyczer/grzyClothTool/master/grzyClothTool/grzyClothTool.csproj";
 
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             using HttpResponseMessage response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseContentRead);
