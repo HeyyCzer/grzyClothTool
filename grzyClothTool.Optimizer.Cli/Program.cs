@@ -31,6 +31,13 @@ internal static class Program
               --no-menu          With only a folder given, run with the defaults instead of asking
           -h, --help             Show this help
 
+        Updates:
+              --update           Download and install the latest grzyOptimizer, then exit
+              --no-update        Skip the update check at startup (or set GRZYOPTIMIZER_SKIP_UPDATE=1)
+          At startup grzyOptimizer checks GitHub for a newer version (5s max, silent when offline). Interactive
+          runs (double-click / dropped folder) offer to install it and continue with the new version; command line
+          runs only print a notice, so scripts are never changed under them.
+
         LOD generation (needs Blender 4.2+; any of these options turns it on):
               --lods             Generate the Medium/Low LODs missing from .ydd models
               --blender <path>   blender.exe (default: newest Blender in Program Files, then PATH)
@@ -67,6 +74,14 @@ internal static class Program
     {
         Console.OutputEncoding = Encoding.UTF8;
 
+        Updater.CleanupPreviousUpdate();
+        if (args.Contains("--update"))
+        {
+            return await Updater.UpdateCommandAsync();
+        }
+        bool skipUpdate = Updater.SkipRequested || args.Contains("--no-update");
+        args = args.Where(a => a != "--no-update").ToArray();
+
         var settings = OptimizerSettings.Load(out var settingsWarning);
         if (settingsWarning != null)
         {
@@ -76,6 +91,13 @@ internal static class Program
         // Double-click (no arguments) or a folder dropped on the exe (the folder alone): ask the settings in the
         // terminal and keep the window open at the end. Any option on the command line skips the menu.
         bool interactive = args.Length == 0 || args is [var only] && !IsOption(only);
+
+        if (!skipUpdate && await Updater.CheckOnStartupAsync(args, interactive) is { } updatedExitCode)
+        {
+            // The new version ran this job (and its own "press any key").
+            return updatedExitCode;
+        }
+
         if (args.Length == 0)
         {
             Console.WriteLine("grzyOptimizer - drag a folder here (or type its path) and press Enter:");

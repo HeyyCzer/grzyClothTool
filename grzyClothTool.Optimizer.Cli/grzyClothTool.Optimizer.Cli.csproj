@@ -12,6 +12,13 @@
     <ApplicationIcon>..\grzyClothTool\Resources\grzyClothToolIcon.ico</ApplicationIcon>
   </PropertyGroup>
 
+  <!-- Same version as the app: both ship in the same release, and the self-update compares this FileVersion
+       with <FileVersion> of grzyClothTool.csproj on master (bumped by scripts/bump-version.ps1). -->
+  <PropertyGroup>
+    <FileVersion>$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)..\grzyClothTool\grzyClothTool.csproj')), '(?&lt;=&lt;FileVersion&gt;)[^&lt;]+'))</FileVersion>
+    <Version>$(FileVersion)</Version>
+  </PropertyGroup>
+
   <!-- dotnet publish -c Release  ->  one self-contained grzyOptimizer.exe, no .NET install needed -->
   <PropertyGroup Condition="'$(Configuration)'=='Release'">
     <SelfContained>true</SelfContained>
@@ -23,6 +30,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\grzyClothTool.Optimization\grzyClothTool.Optimization.csproj" />
+    <ProjectReference Include="..\grzyClothTool.Shared\grzyClothTool.Shared.csproj" />
   </ItemGroup>
 
   <!-- Sollumz submodule (external/Sollumz), shipped next to the exe as sollumz/ for the "bundled" Sollumz mode.

@@ -2,7 +2,7 @@ name: Release
 
 # Triggered by scripts/bump-version.ps1 pushing a vX.Y.Z tag.
 # Asset names matter: the in-app updater downloads releases/download/v<version>/grzyClothTool.zip and expects
-# grzyClothTool.exe at the zip root.
+# grzyClothTool.exe at the zip root; grzyOptimizer's self-update downloads grzyOptimizer.zip with grzyOptimizer.exe at its root.
 on:
   push:
     tags:

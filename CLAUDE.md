@@ -28,7 +28,7 @@ dotnet publish grzyClothTool.Optimizer.Cli -c Release   # single-file self-conta
 | `grzyClothTool` | WPF app (WinExe). AvalonDock, Material.Icons, Magick.NET, Sentry. |
 | `grzyClothTool.Optimization` | UI-free `net10.0` lib shared by app and CLI: texture rules/codec, `FolderOptimizer`, Blender LOD pipeline. Keep it free of WPF deps. |
 | `grzyClothTool.Optimizer.Cli` | `grzyOptimizer.exe <folder>`; hand-rolled arg parsing in `CliOptions.cs`. |
-| `grzyClothTool.Shared` | Plugin interfaces (`IPlugin`, `IPatreonPlugin`) for MEF plugins downloaded to `%LOCALAPPDATA%/grzyClothTool/plugins` (plugin loading currently commented out in `App.xaml.cs`). |
+| `grzyClothTool.Shared` | UI-free `net10.0` code used by app and CLI: `Updates/ReleaseUpdates` (latest version, release asset download/extract, safe delete/retry) and plugin interfaces (`IPlugin`, `IPatreonPlugin`) for MEF plugins downloaded to `%LOCALAPPDATA%/grzyClothTool/plugins` (plugin loading currently commented out in `App.xaml.cs`). Put code needed by both app and CLI here instead of duplicating it. |
 | `grzyClothTool.UnitTests` | xunit; references both the app and Optimization. |
 | `grzyClothTool.Tests.Wpf` | FlaUI (UIA3) end-to-end tests. |
 | `CodeWalker/*` | Vendored CodeWalker (dexyfex). Treat as third-party; change only when necessary. |
@@ -57,5 +57,6 @@ In the app, **View > LOD Generator** (`Views/LodGeneratorWindow`, `Helpers/LodGe
 ## Conventions
 
 - Releases: `./scripts/bump-version.ps1 patch|minor|major [-Push]` bumps `<FileVersion>` in `grzyClothTool.csproj` (the only version the updater reads), commits `:bookmark: vX.Y.Z` and tags. The tag push runs `.github/workflows/release.yml`, which publishes `grzyClothTool.zip` (flat, exe at root — the updater requires that name/layout) and `grzyOptimizer.zip`.
+- Both updaters read the latest version from `<FileVersion>` of `grzyClothTool.csproj` on master. The CLI takes the same FileVersion at build time (property function in its csproj). `grzyOptimizer` checks at startup (skip: `--no-update` / `GRZYOPTIMIZER_SKIP_UPDATE=1`), installs with `--update` or when the interactive user accepts, by renaming installed files to `*.old` (cleaned next start) and relaunching; only single-file publishes self-update.
 - Commit messages use gitmoji prefixes (`:sparkles:`, `:bug:`, `:zap:`, …).
 - Newer code (Optimization, CLI, recent helpers) uses file-scoped namespaces, nullable enabled, and explanatory `///` comments on non-obvious behavior; older app code is block-scoped without nullable — match the file you're in.
