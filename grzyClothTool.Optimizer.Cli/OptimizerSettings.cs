@@ -20,6 +20,7 @@ internal sealed class OptimizerSettings
     public int? DiffuseLimit { get; set; }
     public int? NormalLimit { get; set; }
     public int? SpecularLimit { get; set; }
+    public int? MaxHighTriangles { get; set; }
     public bool? Lods { get; set; }
     public double? LodMediumRatio { get; set; }
     public double? LodLowRatio { get; set; }

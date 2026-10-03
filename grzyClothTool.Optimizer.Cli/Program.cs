@@ -26,6 +26,7 @@ internal static class Program
               --specular <px>    Max specular resolution (default: 1024)
               --dry-run          Only list what would change; write nothing
           -j, --threads <n>      Parallel files (default: CPU cores - 1)
+              --max-tris <n>     Report clothes whose High LOD has more triangles (default: 15000)
           -v, --verbose          List every texture change
               --no-menu          With only a folder given, run with the defaults instead of asking
           -h, --help             Show this help
@@ -51,6 +52,10 @@ internal static class Program
         LODs: for every drawable with a High model but no Medium/Low, Sollumz's "Generate LODs" decimates the
         High mesh (edge collapse) and only the new LOD models are added to the original .ydd; textures, shaders
         and the High model are kept as they are. Clothes with physics (.yld next to the .ydd) are skipped.
+
+        Reports: after each run a review report (failed/unreadable files, clothes above --max-tris, missing LODs,
+        warnings) and a session log (settings + every change) are written to logs/ next to the exe and, unless it is
+        a dry run, to the output folder as grzyOptimizer_report.txt and grzyOptimizer_log.txt.
 
         Settings: the answers of the interactive menu are saved to grzyOptimizer.settings.json next to the exe
         and offered as defaults next time. Command line runs only take the Blender path and Sollumz mode from it.
@@ -123,6 +128,7 @@ internal static class Program
             var sollumz = lods.Sollumz == SollumzSource.Installed ? "installed add-on" : lods.SollumzFolder;
             Console.WriteLine($"LODs:    medium {lods.MediumRatio:0.##}, low {lods.LowRatio:0.##} of High - {BlenderLocator.Resolve(lods.BlenderPath)} (Sollumz: {sollumz})");
         }
+        Console.WriteLine($"Report:  clothes above {cli.MaxHighTriangles} High LOD triangles");
         Console.WriteLine($"Threads: {options.MaxParallelism}{(options.DryRun ? "   (dry run - nothing will be written)" : "")}");
         Console.WriteLine();
 
@@ -136,12 +142,20 @@ internal static class Program
 
         int total = CountFiles(options);
         int done = 0;
+        // Kept here too so a cancelled run still gets its report and log.
+        var processed = new List<FileResult>();
         var progress = new SyncProgress<FileResult>(result =>
         {
+            lock (processed)
+            {
+                processed.Add(result);
+            }
             int current = Interlocked.Increment(ref done);
             PrintResult(result, current, total, cli.Verbose);
         });
 
+        var started = DateTime.Now;
+        var stopwatch = Stopwatch.StartNew();
         FolderOptimizationSummary summary;
         try
         {
@@ -150,6 +164,12 @@ internal static class Program
         catch (OperationCanceledException)
         {
             Console.WriteLine("Cancelled. Files already written are complete; the rest was not processed.");
+            List<FileResult> partial;
+            lock (processed)
+            {
+                partial = processed.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
+            }
+            WriteReports(new FolderOptimizationSummary(partial, stopwatch.Elapsed), cli, options, args, started, cancelled: true);
             return Pause(interactive, 130);
         }
         catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
@@ -159,7 +179,62 @@ internal static class Program
         }
 
         PrintSummary(summary, options.DryRun);
+        WriteReports(summary, cli, options, args, started, cancelled: false);
         return Pause(interactive, summary.Count(FileOutcome.Failed) > 0 ? 1 : 0);
+    }
+
+    private static void WriteReports(FolderOptimizationSummary summary, CliOptions cli, FolderOptimizerOptions options,
+        string[] args, DateTime started, bool cancelled)
+    {
+        var reportOptions = new OptimizationReportOptions
+        {
+            Settings = DescribeSettings(cli, options, args, started),
+            DryRun = options.DryRun,
+            Cancelled = cancelled,
+            HighTriangleLimit = cli.MaxHighTriangles
+        };
+
+        var written = ReportWriter.Write(summary, reportOptions, options, started, out var errors);
+        Console.WriteLine();
+        foreach (var path in written)
+        {
+            Console.WriteLine($"Written: {path}");
+        }
+        foreach (var error in errors)
+        {
+            WriteLine(error, ConsoleColor.Yellow);
+        }
+    }
+
+    private static List<KeyValuePair<string, string>> DescribeSettings(CliOptions cli, FolderOptimizerOptions options, string[] args, DateTime started)
+    {
+        var settings = new List<KeyValuePair<string, string>>
+        {
+            new("Started", started.ToString("yyyy-MM-dd HH:mm:ss")),
+            new("Command line", string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a))),
+            new("Input", options.InputFolder),
+            new("Output", options.OutputFolder ?? "in place"),
+            new("Dry run", options.DryRun ? "yes" : "no"),
+            new("Max diffuse", $"{options.DiffuseLimit}px"),
+            new("Max normal", $"{options.NormalLimit}px"),
+            new("Max specular", $"{options.SpecularLimit}px"),
+            new("Max High tris", cli.MaxHighTriangles.ToString()),
+            new("Threads", options.MaxParallelism.ToString())
+        };
+
+        if (options.Lods is { } lods)
+        {
+            settings.Add(new("LODs", $"medium {lods.MediumRatio:0.##}, low {lods.LowRatio:0.##} of High"));
+            settings.Add(new("Blender", BlenderLocator.Resolve(lods.BlenderPath)));
+            settings.Add(new("Sollumz", lods.Sollumz == SollumzSource.Installed ? "installed add-on" : lods.SollumzFolder ?? ""));
+            settings.Add(new("Blender workers", lods.MaxWorkers.ToString()));
+        }
+        else
+        {
+            settings.Add(new("LODs", "not generated"));
+        }
+
+        return settings;
     }
 
     private static bool ValidateLods(LodGenerationOptions lods)
@@ -277,15 +352,9 @@ internal static class Program
         Console.WriteLine($"  Time:               {summary.Elapsed:hh\\:mm\\:ss}");
     }
 
-    private static string Describe(TextureInfo info) =>
-        $"{info.Width}x{info.Height} {info.Compression.Replace("D3DFMT_", "")} ({info.MipMapCount} mips)";
+    private static string Describe(TextureInfo info) => OptimizationReport.Describe(info);
 
-    private static string FormatBytes(long bytes) => bytes switch
-    {
-        >= 1L << 30 => $"{bytes / (double)(1L << 30):0.##} GB",
-        >= 1L << 20 => $"{bytes / (double)(1L << 20):0.#} MB",
-        _ => $"{bytes / 1024.0:0.#} KB"
-    };
+    private static string FormatBytes(long bytes) => OptimizationReport.FormatBytes(bytes);
 
     private static void WriteLine(string text, ConsoleColor color)
     {

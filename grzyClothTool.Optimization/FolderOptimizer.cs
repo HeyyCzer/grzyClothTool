@@ -54,13 +54,20 @@ public sealed record FileResult(
     long SizeBefore,
     long SizeAfter,
     string? Error = null,
-    IReadOnlyList<LodChange>? LodChanges = null)
+    IReadOnlyList<LodChange>? LodChanges = null,
+    IReadOnlyList<DrawableStats>? DrawableStats = null)
 {
     public IReadOnlyList<LodChange> Lods => LodChanges ?? [];
+
+    /// <summary>Triangle counts of the drawables of a .ydd, as read before any LOD was added. Empty for other files.</summary>
+    public IReadOnlyList<DrawableStats> Drawables => DrawableStats ?? [];
 }
 
 public sealed record FolderOptimizationSummary(IReadOnlyList<FileResult> Files, TimeSpan Elapsed)
 {
+    /// <summary>Blender and Sollumz versions used for the LODs, when Blender was started.</summary>
+    public string? LodVersions { get; init; }
+
     public int Count(FileOutcome outcome) => Files.Count(f => f.Outcome == outcome);
     public int TexturesOptimized => Files.Sum(f => f.Changes.Count);
     public int LodsGenerated => Files.Sum(f => f.Lods.Count);
@@ -120,7 +127,7 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
         });
 
         results.Sort((a, b) => string.Compare(a.RelativePath, b.RelativePath, PathComparison));
-        return new FolderOptimizationSummary(results, DateTime.UtcNow - started);
+        return new FolderOptimizationSummary(results, DateTime.UtcNow - started) { LodVersions = lods?.Versions };
     }
 
     private async Task<FileResult> ProcessFileAsync(string path, LodGenerator? lods, CancellationToken cancellationToken)
@@ -147,6 +154,7 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             return new FileResult(relative, FileOutcome.Skipped, [], [$"could not be read ({ex.Message}); kept as-is"], original.Length, original.Length);
         }
 
+        var drawables = loaded is YddFile yddFile ? LodGrafter.Describe(yddFile) : null;
         var changes = new List<TextureChange>();
         var lodChanges = new List<LodChange>();
         var notes = new List<string>();
@@ -161,13 +169,13 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             CopyToOutput(path, relative);
-            return new FileResult(relative, FileOutcome.Failed, changes, notes, original.Length, original.Length, ex.Message, lodChanges);
+            return new FileResult(relative, FileOutcome.Failed, changes, notes, original.Length, original.Length, ex.Message, lodChanges, drawables);
         }
 
         if (changes.Count == 0 && lodChanges.Count == 0)
         {
             CopyToOutput(path, relative);
-            return new FileResult(relative, FileOutcome.Unchanged, [], notes, original.Length, original.Length);
+            return new FileResult(relative, FileOutcome.Unchanged, [], notes, original.Length, original.Length, null, null, drawables);
         }
 
         if (options.DryRun || optimized == null)
@@ -177,11 +185,11 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             {
                 CopyToOutput(path, relative);
             }
-            return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, original.Length, null, lodChanges);
+            return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, original.Length, null, lodChanges, drawables);
         }
 
         WriteResult(path, relative, optimized);
-        return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, optimized.Length, null, lodChanges);
+        return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, optimized.Length, null, lodChanges, drawables);
     }
 
     private static YtdFile LoadYtd(byte[] data)

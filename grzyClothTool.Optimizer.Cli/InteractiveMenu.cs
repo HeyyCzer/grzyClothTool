@@ -30,6 +30,8 @@ internal static class InteractiveMenu
             v => v.ToString(), s => CliOptions.ParseSize(s, "The resolution"));
         options.SpecularLimit = Ask("Max specular resolution", settings.SpecularLimit ?? defaults.SpecularLimit,
             v => v.ToString(), s => CliOptions.ParseSize(s, "The resolution"));
+        options.MaxHighTriangles = Ask("Report clothes whose High LOD has more triangles than", settings.MaxHighTriangles ?? defaults.MaxHighTriangles,
+            v => v.ToString(), s => CliOptions.ParseInt(s, "The triangle count", min: 1));
 
         options.Lods = AskYesNo("Generate the missing LODs with Blender + Sollumz?", settings.Lods ?? defaults.Lods);
         if (options.Lods)
@@ -41,6 +43,7 @@ internal static class InteractiveMenu
         settings.DiffuseLimit = options.DiffuseLimit;
         settings.NormalLimit = options.NormalLimit;
         settings.SpecularLimit = options.SpecularLimit;
+        settings.MaxHighTriangles = options.MaxHighTriangles;
         settings.Lods = options.Lods;
         if (settings.Save() is { } error)
         {

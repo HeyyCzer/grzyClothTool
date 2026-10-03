@@ -15,6 +15,8 @@ internal sealed class CliOptions
     public bool DryRun { get; set; }
     public int Threads { get; set; } = Math.Max(1, Environment.ProcessorCount - 1);
     public bool Verbose { get; set; }
+    /// <summary>Drawables with more High LOD triangles are listed in the review report.</summary>
+    public int MaxHighTriangles { get; set; } = 15000;
     public bool ShowHelp { get; set; }
 
     public bool Lods { get; set; }
@@ -65,6 +67,9 @@ internal sealed class CliOptions
                     break;
                 case "-j" or "--threads":
                     options.Threads = NextInt(args, ref i, arg, min: 1);
+                    break;
+                case "--max-tris":
+                    options.MaxHighTriangles = NextInt(args, ref i, arg, min: 1);
                     break;
                 case "-v" or "--verbose":
                     options.Verbose = true;
