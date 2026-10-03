@@ -21,7 +21,7 @@ using System.Threading.Tasks;
 namespace grzyClothTool.Models.Drawable;
 #nullable enable
 
-public class GDrawable : INotifyPropertyChanged
+public class GDrawable : INotifyPropertyChanged, IJsonOnDeserialized
 {
     private static readonly BlockingCollection<GDrawable> _loadQueue = new();
     private readonly static SemaphoreSlim _semaphore = new(Math.Clamp(Environment.ProcessorCount - 1, 3, 8));
@@ -480,6 +480,23 @@ public class GDrawable : INotifyPropertyChanged
     }
 
     public GDrawable(Guid id, string filePath, Enums.SexType sex, bool isProp, int typeNumeric, int number, bool hasSkin, ObservableCollection<GTexture> textures)
+        : this(id, filePath, sex, isProp, typeNumeric, number, hasSkin, textures, null)
+    {
+    }
+
+    /// <summary>
+    /// Set when the details stored in the save were reused (see the JSON constructor); they are validated in
+    /// <see cref="IJsonOnDeserialized.OnDeserialized"/> once properties like EnableHighHeels are populated.
+    /// </summary>
+    private bool _detailsRestoredFromSave;
+
+    /// <summary>
+    /// Used by the save file deserializer. <paramref name="details"/> are the details stored in the save; when the
+    /// .ydd wasn't modified after the save was written they are reused instead of queueing a full reload
+    /// (reading + decompressing every drawable of the project on each open).
+    /// </summary>
+    [JsonConstructor]
+    public GDrawable(Guid id, string filePath, Enums.SexType sex, bool isProp, int typeNumeric, int number, bool hasSkin, ObservableCollection<GTexture> textures, GDrawableDetails? details)
     {
         IsLoading = true;
 
@@ -519,9 +536,28 @@ public class GDrawable : INotifyPropertyChanged
         Audio = "none";
         SetDrawableName();
 
+        if (details != null)
+        {
+            Details = details;
+        }
+
         try
         {
-            if (FilePath != null && !IsEncrypted && File.Exists(FullFilePath))
+            if (details != null && FilePath != null && FileHelper.IsUnchangedSinceLoadedSave(FullFilePath))
+            {
+                // The save stores an absolute source path; repoint it in case the project folder moved.
+                foreach (var embedded in details.EmbeddedTextures.Values)
+                {
+                    if (embedded != null)
+                    {
+                        embedded.SourceDrawablePath = FullFilePath;
+                    }
+                }
+
+                _detailsRestoredFromSave = true;
+                IsLoading = false;
+            }
+            else if (FilePath != null && !IsEncrypted && File.Exists(FullFilePath))
             {
                 _loadQueue.Add(this);
             }
@@ -704,6 +740,16 @@ public class GDrawable : INotifyPropertyChanged
         {
             ValidateDetails();
             OnPropertyChanged(nameof(HasEmbeddedTexturesNeedingOptimization));
+        }
+    }
+
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        if (_detailsRestoredFromSave)
+        {
+            // IsLoading is serialized too; a save written mid-load must not leave the drawable "loading".
+            IsLoading = false;
+            ValidateDetails();
         }
     }
 

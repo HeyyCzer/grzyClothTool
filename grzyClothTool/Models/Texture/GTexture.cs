@@ -1,28 +1,22 @@
 ﻿using CodeWalker.GameFiles;
 using CodeWalker.Utils;
 using grzyClothTool.Helpers;
+using grzyClothTool.Optimization;
 using ImageMagick;
 using System;
 using System.ComponentModel;
-using System.Drawing.Imaging;
-using System.Drawing;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Windows.Controls.Primitives;
-using System.Windows.Controls;
 using System.Windows.Media.Imaging;
-using System.Windows.Media;
-using System.Windows;
 using System.Text.Json.Serialization;
 
 namespace grzyClothTool.Models.Texture;
 
 #nullable enable
 
-public class GTexture : INotifyPropertyChanged
+public class GTexture : INotifyPropertyChanged, IJsonOnDeserialized
 {
     private readonly static SemaphoreSlim _semaphore = new(3);
 
@@ -145,6 +139,17 @@ public class GTexture : INotifyPropertyChanged
     public bool IsPreviewDisabled { get; set; }
 
     public GTexture(Guid id, string filePath, int typeNumeric, int number, int txtNumber, bool hasSkin, bool isProp)
+        : this(id, filePath, typeNumeric, number, txtNumber, hasSkin, isProp, null)
+    {
+    }
+
+    /// <summary>
+    /// Used by the save file deserializer. <paramref name="txtDetails"/> are the details stored in the save; they
+    /// are reused as-is when the texture file wasn't modified after the save was written, instead of loading
+    /// and decompressing the whole texture again just to read its size and format.
+    /// </summary>
+    [JsonConstructor]
+    public GTexture(Guid id, string filePath, int typeNumeric, int number, int txtNumber, bool hasSkin, bool isProp, GTextureDetails? txtDetails)
     {
         IsLoading = true;
 
@@ -162,12 +167,22 @@ public class GTexture : INotifyPropertyChanged
         IsProp = isProp;
         HasSkin = hasSkin;
         DisplayName = GetBuildName();
+        TxtDetails = txtDetails!;
 
         if (filePath != null)
         {
             try
             {
                 var fullPath = FileHelper.ResolveFilePath(filePath);
+
+                if (txtDetails != null && FileHelper.IsUnchangedSinceLoadedSave(fullPath))
+                {
+                    TxtDetails.Validate();
+                    _detailsRestoredFromSave = true;
+                    IsLoading = false;
+                    return;
+                }
+
                 Task<GTextureDetails?> _textureDetailsTask = LoadTextureDetailsWithConcurrencyControl(fullPath).ContinueWith(t =>
                 {
                     if (t.IsFaulted)
@@ -204,9 +219,34 @@ public class GTexture : INotifyPropertyChanged
         }
     }
 
+    private bool _detailsRestoredFromSave;
+
+    void IJsonOnDeserialized.OnDeserialized()
+    {
+        // IsLoading is serialized too; a save written mid-load must not leave the texture "loading".
+        if (_detailsRestoredFromSave)
+        {
+            IsLoading = false;
+        }
+    }
+
+    public const int ThumbnailSize = 90;
+
+    /// <summary>
+    /// Thumbnails decode at least this size before trimming the transparent border: atlas textures keep the
+    /// garment in a small corner, so the visible part of a 90px decode would be only a few pixels.
+    /// </summary>
+    public const int ThumbnailDecodeSize = 512;
+
+    private bool _isThumbnailLoading;
+
+    /// <summary>
+    /// Generates <see cref="ImageThumbnail"/> once, on demand (when the owning drawable gets selected).
+    /// Decodes a small mip instead of the full texture and goes through <see cref="ImgHelper.PreviewDecodeGate"/>.
+    /// </summary>
     public async void LoadThumbnailAsync()
     {
-        if (ImageThumbnail != null)
+        if (ImageThumbnail != null || _isThumbnailLoading)
             return;
 
         try
@@ -220,50 +260,36 @@ public class GTexture : INotifyPropertyChanged
             return;
         }
 
-        await Task.Delay(Random.Shared.Next(25, 100));
-        await Task.Run(() =>
+        _isThumbnailLoading = true;
+        await ImgHelper.PreviewDecodeGate.WaitAsync();
+        try
         {
-            try
+            var thumbnail = await Task.Run(() =>
             {
-                using MagickImage img = ImgHelper.GetImage(FullFilePath);
+                using MagickImage? img = ImgHelper.GetPreviewImage(FullFilePath, ThumbnailDecodeSize);
                 if (img == null)
-                    return;
+                    return null;
 
-                img.Resize(90, 90);
-                int w = (int)img.Width;
-                int h = (int)img.Height;
-                byte[] pixels = img.ToByteArray(MagickFormat.Bgra);
+                TextureCodec.TrimTransparentBorder(img);
+                img.Resize(ThumbnailSize, ThumbnailSize);
+                return ImgHelper.ToBitmapSource(img);
+            });
 
-                using Bitmap bitmap = new(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
-                BitmapData bitmapData = bitmap.LockBits(
-                    new Rectangle(0, 0, w, h),
-                    ImageLockMode.WriteOnly,
-                    bitmap.PixelFormat);
-
-                Marshal.Copy(pixels, 0, bitmapData.Scan0, pixels.Length);
-                bitmap.UnlockBits(bitmapData);
-
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    var source = BitmapSource.Create(
-                        bitmap.Width,
-                        bitmap.Height,
-                        96, 96,
-                        PixelFormats.Bgra32,
-                        null,
-                        pixels,
-                        bitmap.Width * 4
-                    );
-                    source.Freeze();
-                    ImageThumbnail = source;
-                });
-            }
-            catch (Exception ex)
+            if (thumbnail != null)
             {
-                Console.WriteLine($"Image thumbnail generation failed: {ex.Message}");
-                LogHelper.Log($"Could not generate image thumbnail for {DisplayName}");
+                ImageThumbnail = thumbnail;
             }
-        });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Image thumbnail generation failed: {ex.Message}");
+            LogHelper.Log($"Could not generate image thumbnail for {DisplayName}");
+        }
+        finally
+        {
+            ImgHelper.PreviewDecodeGate.Release();
+            _isThumbnailLoading = false;
+        }
     }
 
 

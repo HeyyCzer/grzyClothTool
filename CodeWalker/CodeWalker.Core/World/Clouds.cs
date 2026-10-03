@@ -101,6 +101,7 @@ namespace CodeWalker.World
 
         public void Update(float elapsed)
         {
+            if (!Inited) return; //the ped preview never loads clouds
             UpdateAnimOverrides();
         }
 

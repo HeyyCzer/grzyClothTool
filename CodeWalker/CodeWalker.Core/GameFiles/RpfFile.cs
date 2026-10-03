@@ -666,10 +666,10 @@ namespace CodeWalker.GameFiles
         public static T GetResourceFile<T>(byte[] data) where T : class, PackedFile, new()
         {
             T file = null;
-            RpfFileEntry entry = CreateResourceFileEntry(ref data, 0);
+            RpfResourceFileEntry entry = CreateResourceFileEntry(ref data, 0);
             if ((data != null) && (entry != null))
             {
-                data = ResourceBuilder.Decompress(data);
+                data = ResourceBuilder.Decompress(data, entry.SystemSize + entry.GraphicsSize);
                 file = new T();
                 file.Load(data, entry);
             }
@@ -701,7 +701,7 @@ namespace CodeWalker.GameFiles
                 }
             }
 
-            data = ResourceBuilder.Decompress(data);
+            data = ResourceBuilder.Decompress(data, resentry.SystemSize + resentry.GraphicsSize);
 
             file.Load(data, resentry);
 
@@ -730,7 +730,7 @@ namespace CodeWalker.GameFiles
                 }
             }
 
-            byte[] decompressedData = await ResourceBuilder.DecompressAsync(data);
+            byte[] decompressedData = await ResourceBuilder.DecompressAsync(data, resentry.SystemSize + resentry.GraphicsSize);
 
             file.Load(decompressedData, resentry);
         }

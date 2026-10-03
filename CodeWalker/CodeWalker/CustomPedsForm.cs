@@ -50,7 +50,11 @@ namespace CodeWalker
         System.Drawing.Point MouseDownPoint;
         System.Drawing.Point MouseLastPoint;
 
-        public GameFileCache GameFileCache { get; } = new GameFileCache(Settings.Default.CacheSize, Settings.Default.CacheTime, GTAFolder.CurrentGTAFolder, Settings.Default.DLC, false, "levels;anim;audio;data;");
+        // Exclude paths are matched with StartsWith against the lowercased path relative to the GTA folder, so they
+        // need the "x64\" prefix (the old "levels;anim;audio;data;" never matched anything). DLC packs are skipped
+        // too: with EnableDlc = false nothing in them is used, and scanning their ~200k entries cost >100 MB.
+        // The preview only streams a ped and its components, so the 2 GB file cache is capped at 512 MB.
+        public GameFileCache GameFileCache { get; } = new GameFileCache(512L * 1024 * 1024, Settings.Default.CacheTime, GTAFolder.CurrentGTAFolder, Settings.Default.DLC, false, @"x64\audio;x64\levels;x64\data;update\x64\dlcpacks");
 
 
         InputManager Input = new InputManager();
@@ -584,7 +588,7 @@ namespace CodeWalker
                     GameFileCache.LoadAudio = false;
                     GameFileCache.LoadArchetypes = false;//to speed things up a little
                     GameFileCache.BuildExtendedJenkIndex = false;//to speed things up a little
-                    GameFileCache.DoFullStringIndex = true;//to get all global text from DLC...
+                    GameFileCache.DoFullStringIndex = false;//global text isn't shown anywhere in the preview
                     GameFileCache.Init(UpdateStatus, LogError);
                 }
                 catch (Exception ex)
@@ -690,16 +694,7 @@ namespace CodeWalker
                 LogError($"Weather init error: {ex.Message}");
             }
 
-            try
-            {
-                UpdateStatus("Loading clouds...");
-                clouds.Init(GameFileCache, UpdateStatus, weather);
-            }
-            catch (Exception ex)
-            {
-                UpdateStatus("Warning: Clouds loading failed");
-                LogError($"Clouds init error: {ex.Message}");
-            }
+            // Clouds aren't loaded: the preview renders with renderclouds = false.
 
         }
 

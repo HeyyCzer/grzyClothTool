@@ -20,6 +20,12 @@
     <AllowedReferenceRelatedFileExtensions>*.pdb</AllowedReferenceRelatedFileExtensions>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
+  <!-- Texture/drawable loading churns through large byte[] (LOH). With plenty of free RAM the GC lets the LOH
+       grow and fragment (GBs committed for a few hundred MB live); ConserveMemory makes it compact the LOH and
+       give memory back. Written into grzyClothTool.runtimeconfig.json. -->
+  <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="5" />
+  </ItemGroup>
   <ItemGroup>
     <Resource Include="Resources\grzyClothTool.png" />
     <Resource Include="Resources\grzyClothToolIcon.ico" />

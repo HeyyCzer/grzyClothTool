@@ -560,7 +560,7 @@ namespace grzyClothTool.Controls
                             IsOptimizeNeededTooltip = texture.OptimizeDetails.IsOptimizeNeededTooltip
                         };
                     }
-                    newTexture.LoadThumbnailAsync();
+                    // Thumbnail is generated when the duplicated drawable gets selected.
                     newTextures.Add(newTexture);
                 }
 
