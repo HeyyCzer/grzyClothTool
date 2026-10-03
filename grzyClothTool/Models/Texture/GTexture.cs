@@ -1,6 +1,7 @@
 ﻿using CodeWalker.GameFiles;
 using CodeWalker.Utils;
 using grzyClothTool.Helpers;
+using grzyClothTool.Optimization;
 using ImageMagick;
 using System;
 using System.ComponentModel;
@@ -231,6 +232,12 @@ public class GTexture : INotifyPropertyChanged, IJsonOnDeserialized
 
     public const int ThumbnailSize = 90;
 
+    /// <summary>
+    /// Thumbnails decode at least this size before trimming the transparent border: atlas textures keep the
+    /// garment in a small corner, so the visible part of a 90px decode would be only a few pixels.
+    /// </summary>
+    public const int ThumbnailDecodeSize = 512;
+
     private bool _isThumbnailLoading;
 
     /// <summary>
@@ -259,10 +266,11 @@ public class GTexture : INotifyPropertyChanged, IJsonOnDeserialized
         {
             var thumbnail = await Task.Run(() =>
             {
-                using MagickImage? img = ImgHelper.GetPreviewImage(FullFilePath, ThumbnailSize);
+                using MagickImage? img = ImgHelper.GetPreviewImage(FullFilePath, ThumbnailDecodeSize);
                 if (img == null)
                     return null;
 
+                TextureCodec.TrimTransparentBorder(img);
                 img.Resize(ThumbnailSize, ThumbnailSize);
                 return ImgHelper.ToBitmapSource(img);
             });

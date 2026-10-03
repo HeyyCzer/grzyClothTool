@@ -380,7 +380,8 @@ public class GTextureEmbedded : INotifyPropertyChanged
                 if (textureData?.Data?.FullData == null || textureData.Data.FullData.Length == 0)
                     return null;
 
-                using var img = TextureCodec.DecodePreview(textureData, GTexture.ThumbnailSize);
+                using var img = TextureCodec.DecodePreview(textureData, GTexture.ThumbnailDecodeSize);
+                TextureCodec.TrimTransparentBorder(img);
                 img.Resize(GTexture.ThumbnailSize, GTexture.ThumbnailSize);
                 return ImgHelper.ToBitmapSource(img);
             });

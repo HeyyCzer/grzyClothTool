@@ -175,13 +175,14 @@ namespace grzyClothTool.Controls
                 var textureListBox = FindTextureListBox(this);
                 textureListBox.SelectedIndex = gtxt.TxtNumber;
 
-                // The popup is 400x300, so a mip of at least PreviewPopupSize is plenty (decoding the full
-                // 4K top level allocated ~200 MB per hover).
+                // A mip of at least PreviewPopupSize is plenty for the 400x300 popup, even after trimming the
+                // transparent border of atlas textures (decoding the full 4K top level allocated ~200 MB per hover).
                 using MagickImage img = ImgHelper.GetPreviewImage(gtxt.FullFilePath, PreviewPopupSize);
                 if (img == null)
                 {
                     return;
                 }
+                grzyClothTool.Optimization.TextureCodec.TrimTransparentBorder(img);
 
                 int w = gtxt.TxtDetails?.Width > 0 ? gtxt.TxtDetails.Width : (int)img.Width;
                 int h = gtxt.TxtDetails?.Height > 0 ? gtxt.TxtDetails.Height : (int)img.Height;
@@ -233,7 +234,7 @@ namespace grzyClothTool.Controls
 
         }
 
-        private const int PreviewPopupSize = 512;
+        private const int PreviewPopupSize = 2048;
 
         private async void EmbeddedTexturePreview_Click(object sender, RoutedEventArgs e)
         {
@@ -250,6 +251,7 @@ namespace grzyClothTool.Controls
                     return;
 
                 using MagickImage img = grzyClothTool.Optimization.TextureCodec.DecodePreview(textureData, PreviewPopupSize);
+                grzyClothTool.Optimization.TextureCodec.TrimTransparentBorder(img);
 
                 int w = textureData.Width;
                 int h = textureData.Height;

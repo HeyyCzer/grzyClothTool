@@ -89,6 +89,33 @@ public static class TextureCodec
         };
     }
 
+    /// <summary>
+    /// Crops away the fully transparent border of a preview image. Clothing textures are often atlases with the
+    /// garment in one corner (e.g. 2048x4096 with the content in the bottom-left), which made thumbnails look
+    /// empty. Works on the alpha channel only: transparent DXT5 pixels keep arbitrary RGB, so a colour-based
+    /// trim wouldn't find the border. Does nothing for opaque images or when nothing is visible.
+    /// </summary>
+    public static void TrimTransparentBorder(MagickImage image)
+    {
+        if (!image.HasAlpha)
+        {
+            return;
+        }
+
+        using var alpha = (MagickImage)image.Separate(Channels.Alpha).First();
+        alpha.ColorFuzz = new Percentage(2);
+        var box = alpha.BoundingBox;
+        var corner = alpha.GetPixels().GetPixel(0, 0).GetChannel(0);
+        if (corner > Quantum.Max / 50 || box == null || box.Width == 0 || box.Height == 0
+            || (box.Width == image.Width && box.Height == image.Height))
+        {
+            return; // opaque border, nothing visible, or nothing to trim
+        }
+
+        image.Crop(box);
+        image.ResetPage();
+    }
+
     public static int PickPreviewLevel(Texture texture, int minSize)
     {
         int level = 0;

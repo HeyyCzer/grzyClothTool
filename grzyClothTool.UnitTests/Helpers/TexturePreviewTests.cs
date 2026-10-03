@@ -107,6 +107,37 @@ public class TexturePreviewTests
     }
 
     [Fact]
+    public void TrimTransparentBorder_CropsToVisibleContent()
+    {
+        // 100x200 transparent atlas (with junk RGB, like DXT5 leaves) and a 20x10 opaque patch at (10, 150).
+        using var image = new ImageMagick.MagickImage(ImageMagick.MagickColors.Transparent, 100, 200);
+        using var junk = new ImageMagick.MagickImage(new ImageMagick.MagickColor(200, 50, 50, 0), 100, 200);
+        image.Composite(junk, ImageMagick.CompositeOperator.Copy);
+        using var patch = new ImageMagick.MagickImage(ImageMagick.MagickColors.Blue, 20, 10);
+        image.Composite(patch, 10, 150, ImageMagick.CompositeOperator.Over);
+
+        TextureCodec.TrimTransparentBorder(image);
+
+        Assert.Equal(20u, image.Width);
+        Assert.Equal(10u, image.Height);
+        AssertPixel(image, (0, 0, 255));
+    }
+
+    [Fact]
+    public void TrimTransparentBorder_LeavesOpaqueAndEmptyImagesAlone()
+    {
+        using var opaque = new ImageMagick.MagickImage(ImageMagick.MagickColors.Red, 64, 32);
+        using var empty = new ImageMagick.MagickImage(ImageMagick.MagickColors.Transparent, 64, 32);
+
+        TextureCodec.TrimTransparentBorder(opaque);
+        TextureCodec.TrimTransparentBorder(empty);
+
+        Assert.Equal(64u, opaque.Width);
+        Assert.Equal(64u, empty.Width);
+        Assert.Equal(32u, empty.Height);
+    }
+
+    [Fact]
     public void TryExtractMip_ReturnsNullForTruncatedData()
     {
         var texture = CreateUncompressed(64, levels: 3);
