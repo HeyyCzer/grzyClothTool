@@ -6,7 +6,7 @@
 	  <UseWindowsForms>true</UseWindowsForms>
 	  <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 	  <ApplicationIcon>Resources\grzyClothToolIcon.ico</ApplicationIcon>
-	  <FileVersion>1.5.2</FileVersion>
+	  <FileVersion>1.5.3</FileVersion>
 	  
 	  <SelfContained>true</SelfContained>
 	  <PublishSingleFile>false</PublishSingleFile>
