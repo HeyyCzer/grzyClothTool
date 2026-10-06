@@ -244,8 +244,15 @@ public static class TextureCodec
     {
         image.Format = MagickFormat.Dds;
 
-        ResizeExact(image, target.Width, target.Height, target.Compression);
-        image.Settings.SetDefine(MagickFormat.Dds, "compression", GetCompressionString(target.Compression));
+        var compression = ResolveCompression(image, target.Compression);
+        if (compression == "D3DFMT_DXT1" && image.HasAlpha)
+        {
+            // Opaque (or explicitly DXT1): drop the channel so the encoder never emits 1-bit-alpha blocks.
+            image.HasAlpha = false;
+        }
+
+        ResizeExact(image, target.Width, target.Height, compression);
+        image.Settings.SetDefine(MagickFormat.Dds, "compression", GetCompressionString(compression));
         image.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
         // "dds:mipmaps" counts the levels below the base image. Passing the total made every texture one level
         // longer than intended, ending in 2x2/1x1 mips smaller than a DXT block.
@@ -266,6 +273,21 @@ public static class TextureCodec
         return optimized;
     }
 
+    /// <summary>
+    /// Turns <see cref="TextureRules.AutoCompression"/> into DXT1 when no pixel has alpha below fully opaque
+    /// (checked before resizing, so filtering can't introduce partial alpha), otherwise DXT5. Strict on
+    /// purpose: a texture with even one translucent pixel keeps its alpha.
+    /// </summary>
+    public static string ResolveCompression(MagickImage image, string cwCompression)
+    {
+        if (cwCompression != TextureRules.AutoCompression)
+        {
+            return cwCompression;
+        }
+
+        return !image.HasAlpha || image.IsOpaque ? "D3DFMT_DXT1" : TextureRules.DefaultCompression;
+    }
+
     public static string GetCompressionString(string cwCompression) => cwCompression switch
     {
         "D3DFMT_DXT1" => "dxt1",
@@ -277,7 +299,7 @@ public static class TextureCodec
 
     private static bool IsBlockCompressed(string cwCompression) => cwCompression switch
     {
-        "D3DFMT_DXT1" or "D3DFMT_DXT3" or "D3DFMT_DXT5"
+        "D3DFMT_DXT1" or "D3DFMT_DXT3" or "D3DFMT_DXT5" or TextureRules.AutoCompression
         or "D3DFMT_ATI1" or "D3DFMT_ATI2" or "D3DFMT_BC7" => true,
         _ => false,
     };

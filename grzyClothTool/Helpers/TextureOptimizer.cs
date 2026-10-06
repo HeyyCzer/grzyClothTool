@@ -15,6 +15,7 @@ public static class TextureOptimizer
 {
     public const int MinTextureSize = TextureRules.MinTextureSize;
     public const string DefaultCompression = TextureRules.DefaultCompression;
+    public const string AutoCompression = TextureRules.AutoCompression;
 
     public static int GetResolutionLimit(string? type)
     {

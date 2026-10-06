@@ -49,8 +49,12 @@ public class TextureOptimizationCandidate : INotifyPropertyChanged
     private static string Describe(GTextureDetails d) =>
         $"{d.Width}x{d.Height} {FormatCompression(d.Compression)} ({d.MipMapCount} mips)";
 
-    private static string FormatCompression(string compression) =>
-        string.IsNullOrEmpty(compression) || compression == "UNKNOWN" ? "IMG" : compression.Replace("D3DFMT_", "");
+    private static string FormatCompression(string compression) => compression switch
+    {
+        null or "" or "UNKNOWN" => "IMG",
+        TextureOptimizer.AutoCompression => "DXT1 if opaque, else DXT5",
+        _ => compression.Replace("D3DFMT_", "")
+    };
 }
 
 public class DrawablePerformanceIssue

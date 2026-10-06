@@ -19,6 +19,24 @@ public static class TextureRules
     public const int MinTextureSize = 4;
     public const string DefaultCompression = "D3DFMT_DXT5";
 
+    /// <summary>
+    /// Target compression decided from the pixels at encode time (<see cref="TextureCodec.ResolveCompression"/>):
+    /// DXT1 when every pixel is opaque (half the size of DXT5, and DXT1 samples alpha as 1 exactly like an
+    /// opaque DXT5), otherwise <see cref="DefaultCompression"/>. Sized as DXT5 in estimates.
+    /// </summary>
+    public const string AutoCompression = "AUTO";
+
+    // Formats whose alpha channel may turn out to be unused, so re-encoding them can pick DXT1.
+    private static readonly HashSet<string> AlphaCapableFormats =
+    [
+        "D3DFMT_DXT3",
+        "D3DFMT_DXT5",
+        "D3DFMT_A8R8G8B8",
+        "D3DFMT_A8B8G8R8",
+        "UNKNOWN",
+        "",
+    ];
+
     private static readonly HashSet<string> UncompressedFormats =
     [
         "D3DFMT_A8R8G8B8",
@@ -114,6 +132,16 @@ public static class TextureRules
             return null;
         }
 
+        // Re-encoded anyway: let the encoder drop to DXT1 if the alpha channel turns out to be unused.
+        if (AlphaCapableFormats.Contains(current.Compression))
+        {
+            compression = AutoCompression;
+        }
+        else if (current.Compression == "D3DFMT_X8R8G8B8")
+        {
+            compression = "D3DFMT_DXT1"; // no alpha channel at all
+        }
+
         return new TextureInfo(width, height, expectedMipMaps, compression);
     }
 
@@ -132,7 +160,7 @@ public static class TextureRules
             reasons.Add("Downscale");
         }
 
-        if (target.Compression != current.Compression)
+        if (IsUncompressed(current.Compression))
         {
             reasons.Add("Compress");
         }

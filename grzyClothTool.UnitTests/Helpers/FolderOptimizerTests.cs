@@ -152,6 +152,32 @@ public class FolderOptimizerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_OpaqueTextureBecomesDxt1()
+    {
+        var ytdPath = Path.Combine(_input, "tex.ytd");
+        WriteUncompressedYtd(ytdPath, "tex", size: 64, opaque: true);
+
+        var summary = await new FolderOptimizer(new FolderOptimizerOptions { InputFolder = _input, DiffuseLimit = 1024 }).RunAsync();
+
+        Assert.Equal(TextureFormat.D3DFMT_DXT1, ReadSingleTexture(ytdPath).Format);
+        var change = Assert.Single(summary.Files.SelectMany(f => f.Changes));
+        Assert.Equal("D3DFMT_DXT1", change.After.Compression);
+    }
+
+    [Theory]
+    [InlineData(true, TextureFormat.D3DFMT_DXT1)]
+    [InlineData(false, TextureFormat.D3DFMT_DXT5)]
+    public void EncodeDds_AutoPicksDxt1OnlyForOpaqueImages(bool opaque, TextureFormat expected)
+    {
+        using var image = new ImageMagick.MagickImage(opaque ? ImageMagick.MagickColors.Red : new ImageMagick.MagickColor(255, 0, 0, 254), 16, 16);
+        var target = new TextureInfo(16, 16, TextureRules.GetExpectedMipMapCount(16, 16), TextureRules.AutoCompression);
+
+        var texture = CodeWalker.Utils.DDSIO.GetTexture(TextureCodec.EncodeDds(image, target));
+
+        Assert.Equal(expected, texture.Format);
+    }
+
+    [Fact]
     public async Task RunAsync_DryRunWritesNothing()
     {
         var ytdPath = Path.Combine(_input, "tex.ytd");
@@ -215,10 +241,17 @@ public class FolderOptimizerTests : IDisposable
         Assert.Equal(expected, FolderOptimizer.ClassifyByName(name));
     }
 
-    private static void WriteUncompressedYtd(string path, string name, int size)
+    private static void WriteUncompressedYtd(string path, string name, int size, bool opaque = false)
     {
         var pixels = new byte[size * size * 4];
         Random.Shared.NextBytes(pixels);
+        if (opaque)
+        {
+            for (int i = 3; i < pixels.Length; i += 4)
+            {
+                pixels[i] = 255; // BGRA: alpha is the 4th byte
+            }
+        }
 
         var texture = new Texture
         {

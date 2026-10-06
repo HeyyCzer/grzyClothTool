@@ -44,7 +44,7 @@ dotnet publish grzyClothTool.Optimizer.Cli -c Release   # single-file self-conta
 
 ## Optimizer / LOD generation
 
-`FolderOptimizer` walks a folder (in place or to an `_optimized` copy), optimizes every `.ytd` and embedded `.ydd` textures (power-of-two within limit, DXT5 for uncompressed, full mips), and — with `LodGenerationOptions` — adds missing Medium/Low LODs:
+`FolderOptimizer` walks a folder (in place or to an `_optimized` copy), optimizes every `.ytd` and embedded `.ydd` textures (power-of-two within limit, full mips; re-encoded textures target `AUTO` = DXT1 if fully opaque else DXT5, resolved from pixels in `TextureCodec.ResolveCompression`), and — with `LodGenerationOptions` — adds missing Medium/Low LODs:
 
 1. `LodGenerator` exports the YDD to CodeWalker XML in a temp dir.
 2. `BlenderWorkerPool` keeps long-lived Blender processes running the embedded `Lods/blender_lod_worker.py` (extracted to temp at runtime). Protocol: JSON job per line on stdin; answers on stdout prefixed with `@@GRZY@@ `. Sollumz "Generate LODs" decimates the High mesh.

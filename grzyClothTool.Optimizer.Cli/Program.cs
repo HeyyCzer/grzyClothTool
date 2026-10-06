@@ -54,7 +54,8 @@ internal static class Program
 
         What is optimized (same rules as grzyClothTool):
           - resolution: nearest power of two, halved until within the limit (aspect ratio kept)
-          - uncompressed textures (A8R8G8B8/X8R8G8B8/A8B8G8R8) are compressed to DXT5
+          - uncompressed textures (A8R8G8B8/X8R8G8B8/A8B8G8R8) are compressed
+          - re-encoded textures become DXT1 when fully opaque (half the size), otherwise DXT5
           - textures with a single mip level get a full mip chain
           Textures in formats that cannot be re-encoded (ATI2/BC5, BC7) are reported and kept.
 

@@ -359,15 +359,24 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
                 continue;
             }
 
-            changes.Add(new TextureChange(texture.Name, kind, before, target, TextureRules.DescribeChanges(before, target)));
+            var after = target;
             if (!options.DryRun)
             {
-                replacements[texture.Name] = TextureCodec.Optimize(texture, target);
+                var optimized = TextureCodec.Optimize(texture, target);
+                replacements[texture.Name] = optimized;
+                after = TextureCodec.Describe(optimized); // AUTO resolves to DXT1/DXT5 only once pixels are known
             }
             else
             {
                 replacements[texture.Name] = texture;
             }
+
+            var reasons = TextureRules.DescribeChanges(before, after);
+            if (target.Compression == TextureRules.AutoCompression && after.Compression == "D3DFMT_DXT1")
+            {
+                reasons.Add("Opaque -> DXT1");
+            }
+            changes.Add(new TextureChange(texture.Name, kind, before, after, reasons));
         }
 
         return replacements;

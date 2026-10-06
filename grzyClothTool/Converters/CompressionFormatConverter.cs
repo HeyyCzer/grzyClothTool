@@ -27,6 +27,7 @@ public class CompressionFormatConverter : IValueConverter
             "BC6" => "BC6",
             "BC7" => "BC7",
             "UNKNOWN" => "UNKNOWN",
+            "AUTO" => "DXT1/DXT5 (auto)",
             _ => "OTHER"
         };
     }

@@ -45,7 +45,7 @@ public class TextureOptimizerTests
         Assert.Equal(1024, target.Width);
         Assert.Equal(512, target.Height);
         Assert.Equal(TextureOptimizer.GetExpectedMipMapCount(1024, 512), target.MipMapCount);
-        Assert.Equal("D3DFMT_DXT5", target.Compression);
+        Assert.Equal(TextureOptimizer.AutoCompression, target.Compression);
     }
 
     [Fact]
@@ -75,7 +75,7 @@ public class TextureOptimizerTests
         var target = TextureOptimizer.ComputeTarget(Details(512, 512, 8, "D3DFMT_A8R8G8B8"), 1024);
 
         Assert.NotNull(target);
-        Assert.Equal(TextureOptimizer.DefaultCompression, target.Compression);
+        Assert.Equal(TextureOptimizer.AutoCompression, target.Compression);
         Assert.Contains("Compress", TextureOptimizer.DescribeChanges(Details(512, 512, 8, "D3DFMT_A8R8G8B8"), target));
     }
 
