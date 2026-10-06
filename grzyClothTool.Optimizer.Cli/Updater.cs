@@ -164,6 +164,7 @@ internal static class Updater
                 throw new FileNotFoundException($"{ExeName} not found in the update package.");
             }
 
+            PreloadAssemblies();
             ReplaceInstall(staging);
             Console.WriteLine($"Updated to v{version}.");
             return true;
@@ -271,6 +272,44 @@ internal static class Updater
             }
             catch
             {
+            }
+        }
+    }
+
+    /// <summary>
+    /// A single-file exe loads bundled assemblies lazily, reopening the bundle by its path. Once the install is
+    /// replaced that path is the new exe (different offsets), so anything first used afterwards (e.g.
+    /// System.Diagnostics.Process in <see cref="Relaunch"/>) fails with FileNotFoundException. Loads every assembly
+    /// reachable from the entry assembly while the path still points to this exe.
+    /// </summary>
+    private static void PreloadAssemblies()
+    {
+        var entry = Assembly.GetEntryAssembly();
+        if (entry == null)
+        {
+            return;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Stack<Assembly>();
+        pending.Push(entry);
+        seen.Add(entry.GetName().Name ?? "");
+        while (pending.TryPop(out var assembly))
+        {
+            foreach (var reference in assembly.GetReferencedAssemblies())
+            {
+                if (!seen.Add(reference.Name ?? ""))
+                {
+                    continue;
+                }
+                try
+                {
+                    pending.Push(Assembly.Load(reference));
+                }
+                catch
+                {
+                    // Optional/platform-specific reference that is not shipped; never used by this process either.
+                }
             }
         }
     }
