@@ -99,6 +99,19 @@ public static class LodGrafter
                     continue;
                 }
 
+                var issues = LodValidator.ValidateModels(models, original.DrawableModels!.High,
+                    original.ShaderGroup?.Shaders?.data_items?.Length ?? 0, entry.Name, level.ToString(), generated: true);
+                var errors = issues.Where(i => i.Severity == LodIssueSeverity.Error).ToList();
+                if (errors.Count > 0)
+                {
+                    notes.Add($"{entry.Name}: generated {level} LOD failed validation, not added: {Summarize(errors)}");
+                    continue;
+                }
+                if (issues.Count > 0)
+                {
+                    notes.Add($"{entry.Name}: generated {level} LOD warnings: {Summarize(issues)}");
+                }
+
                 original.DrawableModels ??= new DrawableModelsBlock();
                 if (level == LodLevel.Medium)
                 {
@@ -233,6 +246,9 @@ public static class LodGrafter
 
         return true;
     }
+
+    private static string Summarize(List<LodIssue> issues) =>
+        string.Join("; ", issues.Take(3).Select(i => i.Message)) + (issues.Count > 3 ? $" (+{issues.Count - 3} more)" : "");
 
     private static string NameOf(Drawable? drawable, int index)
     {

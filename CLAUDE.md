@@ -50,7 +50,7 @@ dotnet publish grzyClothTool.Optimizer.Cli -c Release   # single-file self-conta
 2. `BlenderWorkerPool` keeps long-lived Blender processes running the embedded `Lods/blender_lod_worker.py` (extracted to temp at runtime). Protocol: JSON job per line on stdin; answers on stdout prefixed with `@@GRZY@@ `. Sollumz "Generate LODs" decimates the High mesh.
 3. `LodGrafter` copies only the new LOD models back into the original YDD.
 
-YDDs with a sibling `.yld` (cloth physics) are skipped. Blender located by `BlenderLocator` or `--blender`; Sollumz is `installed`, `bundled`, or a folder path.
+`LodValidator` checks every grafted LOD before it is added (buffers vs declaration, index range, vertex layout and skinning vs the High model) and `FolderOptimizer` re-validates the saved file; a broken LOD is dropped / the file fails instead of shipping. High-model comparison is strict only for generated LODs (hand-made LODs of working clothes break it routinely). `grzyOptimizer --validate <folder> [--original <folder>]` runs it on a pack, marking problems absent from the original as NEW. YDDs with a sibling `.yld` (cloth physics) are skipped. Blender located by `BlenderLocator` or `--blender`; Sollumz is `installed`, `bundled`, or a folder path.
 
 In the app, **View > LOD Generator** (`Views/LodGeneratorWindow`, `Helpers/LodGenerationHelper`) runs the same `LodGenerator` on project drawables missing Med/Low models (drawables with `ClothPhysicsPath` skipped). The result is written to project assets as `{drawable.Id}.ydd` and `FilePath` is repointed, so external projects' originals are never touched. Its Blender/Sollumz choices persist in `PersistentSettingsHelper.LodGenerator` (settings.json); the app also ships the Sollumz submodule as `sollumz/` next to the exe.
 

@@ -26,6 +26,8 @@ internal static class Program
               --normal <px>      Max normal map resolution (default: 1024)
               --specular <px>    Max specular resolution (default: 1024)
               --dry-run          Only list what would change; write nothing
+              --validate         Only check the models of every .ydd (see "Validation" below); write nothing
+              --original <dir>   With --validate: the original pack the folder was optimized from
           -j, --threads <n>      Parallel files (default: CPU cores - 1)
               --max-tris <n>     Report clothes whose High LOD has more triangles (default: 15000)
               --include-hair     Also optimize hair (by default hair is copied unchanged)
@@ -62,6 +64,14 @@ internal static class Program
         LODs: for every drawable with a High model but no Medium/Low, Sollumz's "Generate LODs" decimates the
         High mesh (edge collapse) and only the new LOD models are added to the original .ydd; textures, shaders
         and the High model are kept as they are. Clothes with physics (.yld next to the .ydd) are skipped.
+
+        Validation: --validate reads every .ydd and checks each LOD for what can crash the game: vertex/index
+        buffers matching their declaration, indices past the last vertex, more than 65535 vertices, empty or only
+        degenerate geometries, NaN positions, blend indices past the bone table, and for Medium/Low/VeryLow the vertex
+        layout and the skinning against the High model. The High comparison is only a warning for hand-made LODs
+        (working clothes break it all the time); with --original, LODs missing from the original pack count as
+        generated and must match their High model, and problems the original does not have are marked NEW.
+        Exit code 1 when any error is found. Generated LODs are always validated before being added.
 
         Reports: after each run a review report (failed/unreadable files, clothes above --max-tris, missing LODs,
         warnings) and a session log (settings + every change) are written to logs/ next to the exe and, unless it is
@@ -118,7 +128,7 @@ internal static class Program
         {
             cli = CliOptions.Parse(args, settings);
             // Checked up front so a typo in the last folder doesn't show up only after the first ones ran.
-            if (cli.InputFolders.FirstOrDefault(f => !Directory.Exists(f)) is { } missing)
+            if (cli.InputFolders.Append(cli.OriginalFolder).FirstOrDefault(f => f != null && !Directory.Exists(f)) is { } missing)
             {
                 throw new ArgumentException($"Folder not found: '{missing}'.");
             }
@@ -138,6 +148,11 @@ internal static class Program
         {
             Console.WriteLine(Usage);
             return 0;
+        }
+
+        if (cli.Validate)
+        {
+            return Pause(interactive, ValidateFolders(cli.InputFolders, cli.OriginalFolder));
         }
 
         if (cli.Lods && !ValidateLods(cli.ToOptimizerOptions(cli.InputFolders[0]).Lods!))
@@ -332,6 +347,104 @@ internal static class Program
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// --validate: checks the models of every .ydd. With <paramref name="originalFolder"/>, each file is compared with
+    /// the file at the same relative path there. Returns 1 when any error was found, else 0.
+    /// </summary>
+    private static int ValidateFolders(IReadOnlyList<string> folders, string? originalFolder)
+    {
+        int files = 0, broken = 0, unreadable = 0, errors = 0, warnings = 0, newIssues = 0;
+        foreach (var folder in folders)
+        {
+            var root = Path.GetFullPath(folder);
+            foreach (var path in Directory.EnumerateFiles(root, "*.ydd", SearchOption.AllDirectories).Order(StringComparer.OrdinalIgnoreCase))
+            {
+                files++;
+                var relative = Path.GetRelativePath(root, path);
+                List<LodIssue> issues;
+                HashSet<string>? before = null;
+                try
+                {
+                    var ydd = LoadYdd(path);
+                    var original = originalFolder == null ? null : Path.Combine(originalFolder, relative);
+                    if (original != null && File.Exists(original))
+                    {
+                        var originalYdd = LoadYdd(original);
+                        before = LodValidator.Validate(originalYdd).Select(i => i.ToString()).ToHashSet();
+                        issues = LodValidator.Validate(ydd, GeneratedLods(originalYdd, ydd));
+                    }
+                    else
+                    {
+                        issues = LodValidator.Validate(ydd);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    unreadable++;
+                    WriteLine($"SKIPPED {relative}: could not be read ({ex.Message})", ConsoleColor.Yellow);
+                    continue;
+                }
+
+                if (issues.Count == 0)
+                {
+                    continue;
+                }
+
+                int fileErrors = issues.Count(i => i.Severity == LodIssueSeverity.Error);
+                errors += fileErrors;
+                warnings += issues.Count - fileErrors;
+                if (fileErrors > 0) broken++;
+                WriteLine($"{(fileErrors > 0 ? "ERROR  " : "WARNING")} {relative}", fileErrors > 0 ? ConsoleColor.Red : ConsoleColor.Yellow);
+                foreach (var issue in issues)
+                {
+                    bool isNew = before != null && !before.Contains(issue.ToString());
+                    if (isNew) newIssues++;
+                    WriteLine($"          {(isNew ? "NEW " : "")}{issue}", issue.Severity == LodIssueSeverity.Error ? ConsoleColor.Red : ConsoleColor.Gray);
+                }
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("Validation");
+        Console.WriteLine($"  .ydd files:   {files}");
+        WriteLine($"  With errors:  {broken} ({errors} error(s))", broken > 0 ? ConsoleColor.Red : ConsoleColor.Green);
+        Console.WriteLine($"  Warnings:     {warnings}");
+        if (originalFolder != null)
+        {
+            WriteLine($"  New issues:   {newIssues} (not in the original pack)", newIssues > 0 ? ConsoleColor.Yellow : ConsoleColor.Green);
+        }
+        if (unreadable > 0)
+        {
+            WriteLine($"  Unreadable:   {unreadable}", ConsoleColor.Yellow);
+        }
+        return broken > 0 ? 1 : 0;
+    }
+
+    private static CodeWalker.GameFiles.YddFile LoadYdd(string path)
+    {
+        var ydd = new CodeWalker.GameFiles.YddFile();
+        ydd.Load(File.ReadAllBytes(path));
+        return ydd;
+    }
+
+    /// <summary>LOD levels present in <paramref name="optimized"/> but missing from the same drawable in <paramref name="original"/>.</summary>
+    private static HashSet<(string Drawable, string Level)> GeneratedLods(CodeWalker.GameFiles.YddFile original, CodeWalker.GameFiles.YddFile optimized)
+    {
+        var before = LodGrafter.Describe(original).ToDictionary(d => d.Name, StringComparer.OrdinalIgnoreCase);
+        var generated = new HashSet<(string, string)>();
+        foreach (var after in LodGrafter.Describe(optimized))
+        {
+            if (!before.TryGetValue(after.Name, out var old))
+            {
+                continue;
+            }
+            if (old.MediumTriangles == 0 && after.MediumTriangles > 0) generated.Add((after.Name, "Medium"));
+            if (old.LowTriangles == 0 && after.LowTriangles > 0) generated.Add((after.Name, "Low"));
+            if (old.VeryLowTriangles == 0 && after.VeryLowTriangles > 0) generated.Add((after.Name, "VeryLow"));
+        }
+        return generated;
     }
 
     private static int CountFiles(FolderOptimizerOptions options)

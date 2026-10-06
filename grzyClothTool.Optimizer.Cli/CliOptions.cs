@@ -20,6 +20,10 @@ internal sealed class CliOptions
     public int MaxHighTriangles { get; set; } = 15000;
     public bool IncludeHair { get; set; }
     public bool ShowHelp { get; set; }
+    /// <summary>Only check the models of the .ydd files (LOD validation); nothing is written.</summary>
+    public bool Validate { get; set; }
+    /// <summary>With <see cref="Validate"/>: the original pack, to tell generated LODs and new problems apart.</summary>
+    public string? OriginalFolder { get; set; }
 
     public bool Lods { get; set; }
     public string? BlenderPath { get; set; }
@@ -66,6 +70,13 @@ internal sealed class CliOptions
                     break;
                 case "--dry-run":
                     options.DryRun = true;
+                    break;
+                case "--validate":
+                    options.Validate = true;
+                    break;
+                case "--original":
+                    options.OriginalFolder = NextValue(args, ref i, arg);
+                    options.Validate = true;
                     break;
                 case "-j" or "--threads":
                     options.Threads = NextInt(args, ref i, arg, min: 1);
@@ -126,6 +137,10 @@ internal sealed class CliOptions
         if (options.OutputFolder != null && options.InputFolders.Count > 1)
         {
             throw new ArgumentException("--out takes a single folder; with several folders each one goes to <folder>_optimized.");
+        }
+        if (options.OriginalFolder != null && options.InputFolders.Count > 1)
+        {
+            throw new ArgumentException("--original takes a single folder to compare with.");
         }
         if (options.LodLowRatio >= options.LodMediumRatio)
         {

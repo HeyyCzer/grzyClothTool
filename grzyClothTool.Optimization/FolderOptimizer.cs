@@ -331,7 +331,34 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
     {
         bool texturesReplaced = OptimizeYddTextures(ydd, changes, notes);
         bool lodsAdded = lods != null && await lods.AddMissingLodsAsync(ydd, path, lodChanges, notes, options.DryRun, cancellationToken);
-        return texturesReplaced || lodsAdded ? ydd.Save() : null;
+        if (!texturesReplaced && !lodsAdded)
+        {
+            return null;
+        }
+
+        var saved = ydd.Save();
+        if (lodsAdded)
+        {
+            ValidateSavedLods(saved, lodChanges);
+        }
+        return saved;
+    }
+
+    /// <summary>
+    /// Reads the saved file back, as the game would, and checks the LODs that were added. Throws when one is broken,
+    /// so the file fails and the original is kept instead of shipping a model that can crash the game.
+    /// </summary>
+    private static void ValidateSavedLods(byte[] saved, List<LodChange> lodChanges)
+    {
+        var added = lodChanges.Select(c => (c.Drawable, Level: c.Level.ToString())).ToHashSet();
+        var errors = LodValidator.Validate(LoadYdd(saved), added)
+            .Where(i => i.Severity == LodIssueSeverity.Error && added.Contains((i.Drawable, i.Level)))
+            .ToList();
+        if (errors.Count > 0)
+        {
+            throw new InvalidDataException("generated LODs failed validation after saving: "
+                + string.Join("; ", errors.Take(3)) + (errors.Count > 3 ? $" (+{errors.Count - 3} more)" : ""));
+        }
     }
 
     /// <summary>Returns true when at least one embedded texture was replaced.</summary>
