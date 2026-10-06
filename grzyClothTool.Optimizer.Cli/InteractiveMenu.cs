@@ -9,20 +9,29 @@ namespace grzyClothTool.Optimizer.Cli;
 /// </summary>
 internal static class InteractiveMenu
 {
-    public static CliOptions Ask(string folder, OptimizerSettings settings)
+    /// <summary>The answers apply to every folder in <paramref name="folders"/>.</summary>
+    public static CliOptions Ask(IReadOnlyList<string> folders, OptimizerSettings settings)
     {
         var defaults = new CliOptions();
-        var fullPath = Path.GetFullPath(folder).TrimEnd('\\', '/');
+        var names = folders.Select(f => Path.GetFileName(Path.GetFullPath(f).TrimEnd('\\', '/'))).ToList();
 
         Console.WriteLine();
-        Console.WriteLine($"Folder: {fullPath}");
+        foreach (var folder in folders)
+        {
+            Console.WriteLine($"Folder: {Path.GetFullPath(folder).TrimEnd('\\', '/')}");
+        }
+        if (folders.Count > 1)
+        {
+            Console.WriteLine($"The {folders.Count} folders are optimized one after another with the same answers.");
+        }
         Console.WriteLine("Press Enter to keep the value in parentheses.");
         Console.WriteLine();
 
-        var options = new CliOptions { InputFolder = folder };
+        var options = new CliOptions { InputFolders = [.. folders] };
 
+        var copyName = folders.Count == 1 ? $"\"{names[0]}_optimized\"" : "\"<folder>_optimized\"";
         options.InPlace = AskYesNo(
-            $"Overwrite the original files? (no = write a copy to \"{Path.GetFileName(fullPath)}_optimized\")",
+            $"Overwrite the original files? (no = write a copy to {copyName})",
             settings.InPlace ?? defaults.InPlace);
         options.DiffuseLimit = Ask("Max diffuse resolution", settings.DiffuseLimit ?? defaults.DiffuseLimit,
             v => v.ToString(), s => CliOptions.ParseSize(s, "The resolution"));

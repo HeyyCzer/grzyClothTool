@@ -6,7 +6,8 @@ namespace grzyClothTool.Optimizer.Cli;
 
 internal sealed class CliOptions
 {
-    public string? InputFolder { get; set; }
+    /// <summary>Folders to optimize, one after another with the same settings.</summary>
+    public List<string> InputFolders { get; set; } = [];
     public string? OutputFolder { get; set; }
     public bool InPlace { get; set; }
     public int DiffuseLimit { get; set; } = 1024;
@@ -109,22 +110,22 @@ internal sealed class CliOptions
                     {
                         throw new ArgumentException($"Unknown option '{arg}'.");
                     }
-                    if (options.InputFolder != null)
-                    {
-                        throw new ArgumentException($"Only one folder can be given (got '{options.InputFolder}' and '{arg}').");
-                    }
-                    options.InputFolder = arg.Trim('"');
+                    options.InputFolders.Add(arg.Trim('"'));
                     break;
             }
         }
 
-        if (options.InputFolder == null)
+        if (options.InputFolders.Count == 0)
         {
             throw new ArgumentException("No folder given.");
         }
         if (options.InPlace && options.OutputFolder != null)
         {
             throw new ArgumentException("Use either --out or --in-place, not both.");
+        }
+        if (options.OutputFolder != null && options.InputFolders.Count > 1)
+        {
+            throw new ArgumentException("--out takes a single folder; with several folders each one goes to <folder>_optimized.");
         }
         if (options.LodLowRatio >= options.LodMediumRatio)
         {
@@ -134,9 +135,9 @@ internal sealed class CliOptions
         return options;
     }
 
-    public FolderOptimizerOptions ToOptimizerOptions()
+    public FolderOptimizerOptions ToOptimizerOptions(string inputFolder)
     {
-        var input = Path.GetFullPath(InputFolder!).TrimEnd('\\', '/');
+        var input = Path.GetFullPath(inputFolder).TrimEnd('\\', '/');
         return new FolderOptimizerOptions
         {
             InputFolder = input,

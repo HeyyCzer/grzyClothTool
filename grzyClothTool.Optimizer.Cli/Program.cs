@@ -12,14 +12,15 @@ internal static class Program
         and optionally generates the missing LODs of .ydd models with Blender + Sollumz.
 
         Usage:
-          grzyOptimizer <folder> [options]
-          (or drag a folder onto grzyOptimizer.exe: the settings are then asked in the terminal)
+          grzyOptimizer <folder> [<folder>...] [options]
+          (or drag one or more folders onto grzyOptimizer.exe: the settings are then asked in the terminal)
 
         By default the optimized copy of the whole folder is written to "<folder>_optimized";
-        the original folder is not touched.
+        the original folder is not touched. Several folders run one after another with the same settings,
+        each with its own copy and reports.
 
         Options:
-          -o, --out <folder>     Output folder (default: <folder>_optimized)
+          -o, --out <folder>     Output folder (default: <folder>_optimized; only with a single input folder)
               --in-place         Overwrite the files in <folder> instead of writing a copy
               --diffuse <px>     Max diffuse resolution  (default: 1024)
               --normal <px>      Max normal map resolution (default: 1024)
@@ -90,9 +91,9 @@ internal static class Program
             WriteLine(settingsWarning, ConsoleColor.Yellow);
         }
 
-        // Double-click (no arguments) or a folder dropped on the exe (the folder alone): ask the settings in the
+        // Double-click (no arguments) or folders dropped on the exe (only folders): ask the settings in the
         // terminal and keep the window open at the end. Any option on the command line skips the menu.
-        bool interactive = args.Length == 0 || args is [var only] && !IsOption(only);
+        bool interactive = args.All(a => !IsOption(a));
 
         if (!skipUpdate && await Updater.CheckOnStartupAsync(args, interactive) is { } updatedExitCode)
         {
@@ -116,13 +117,14 @@ internal static class Program
         try
         {
             cli = CliOptions.Parse(args, settings);
+            // Checked up front so a typo in the last folder doesn't show up only after the first ones ran.
+            if (cli.InputFolders.FirstOrDefault(f => !Directory.Exists(f)) is { } missing)
+            {
+                throw new ArgumentException($"Folder not found: '{missing}'.");
+            }
             if (interactive)
             {
-                if (!Directory.Exists(cli.InputFolder))
-                {
-                    throw new ArgumentException($"Folder not found: '{cli.InputFolder}'.");
-                }
-                cli = InteractiveMenu.Ask(cli.InputFolder!, settings);
+                cli = InteractiveMenu.Ask(cli.InputFolders, settings);
             }
         }
         catch (ArgumentException ex)
@@ -138,12 +140,47 @@ internal static class Program
             return 0;
         }
 
-        var options = cli.ToOptimizerOptions();
-        if (options.Lods != null && !ValidateLods(options.Lods))
+        if (cli.Lods && !ValidateLods(cli.ToOptimizerOptions(cli.InputFolders[0]).Lods!))
         {
             return Pause(interactive, 2);
         }
 
+        using var cancellation = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            Console.WriteLine("Cancelling after the files in progress...");
+            cancellation.Cancel();
+        };
+
+        var exitCodes = new List<int>();
+        for (int i = 0; i < cli.InputFolders.Count; i++)
+        {
+            var folder = cli.InputFolders[i];
+            if (cli.InputFolders.Count > 1)
+            {
+                WriteLine($"=== Folder {i + 1}/{cli.InputFolders.Count}: {Path.GetFullPath(folder)} ===", ConsoleColor.Cyan);
+            }
+
+            int exitCode = await RunFolderAsync(cli, cli.ToOptimizerOptions(folder), args, cancellation.Token);
+            exitCodes.Add(exitCode);
+            if (cancellation.IsCancellationRequested)
+            {
+                break;
+            }
+            Console.WriteLine();
+        }
+
+        if (cli.InputFolders.Count > 1)
+        {
+            PrintFoldersSummary(cli.InputFolders, exitCodes);
+        }
+        return Pause(interactive, exitCodes.Max());
+    }
+
+    /// <summary>Optimizes one folder, prints its summary and writes its reports. Returns the exit code of that folder.</summary>
+    private static async Task<int> RunFolderAsync(CliOptions cli, FolderOptimizerOptions options, string[] args, CancellationToken cancellationToken)
+    {
         Console.WriteLine($"Input:   {Path.GetFullPath(options.InputFolder)}");
         Console.WriteLine(options.OutputFolder == null ? "Output:  in place" : $"Output:  {Path.GetFullPath(options.OutputFolder)}");
         Console.WriteLine($"Limits:  diffuse {options.DiffuseLimit}px, normal {options.NormalLimit}px, specular {options.SpecularLimit}px");
@@ -156,14 +193,6 @@ internal static class Program
         Console.WriteLine($"Report:  clothes above {cli.MaxHighTriangles} High LOD triangles");
         Console.WriteLine($"Threads: {options.MaxParallelism}{(options.DryRun ? "   (dry run - nothing will be written)" : "")}");
         Console.WriteLine();
-
-        using var cancellation = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, e) =>
-        {
-            e.Cancel = true;
-            Console.WriteLine("Cancelling after the files in progress...");
-            cancellation.Cancel();
-        };
 
         int total = CountFiles(options);
         int done = 0;
@@ -184,7 +213,7 @@ internal static class Program
         FolderOptimizationSummary summary;
         try
         {
-            summary = await new FolderOptimizer(options).RunAsync(progress, cancellation.Token);
+            summary = await new FolderOptimizer(options).RunAsync(progress, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -195,17 +224,36 @@ internal static class Program
                 partial = processed.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase).ToList();
             }
             WriteReports(new FolderOptimizationSummary(partial, stopwatch.Elapsed), cli, options, args, started, cancelled: true);
-            return Pause(interactive, 130);
+            return 130;
         }
         catch (Exception ex) when (ex is DirectoryNotFoundException or ArgumentException)
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
-            return Pause(interactive, 2);
+            return 2;
         }
 
         PrintSummary(summary, options.DryRun);
         WriteReports(summary, cli, options, args, started, cancelled: false);
-        return Pause(interactive, summary.Count(FileOutcome.Failed) > 0 ? 1 : 0);
+        return summary.Count(FileOutcome.Failed) > 0 ? 1 : 0;
+    }
+
+    /// <param name="exitCodes">Exit code of each folder that ran, in order; folders after a cancel have none.</param>
+    private static void PrintFoldersSummary(IReadOnlyList<string> folders, List<int> exitCodes)
+    {
+        Console.WriteLine();
+        Console.WriteLine("Folders");
+        for (int i = 0; i < folders.Count; i++)
+        {
+            var (text, color) = i >= exitCodes.Count ? ("not run (cancelled)", ConsoleColor.DarkGray)
+                : exitCodes[i] switch
+                {
+                    0 => ("ok", ConsoleColor.Green),
+                    1 => ("done, with failed files (see its report)", ConsoleColor.Yellow),
+                    130 => ("cancelled", ConsoleColor.Yellow),
+                    _ => ("error", ConsoleColor.Red)
+                };
+            WriteLine($"  {Path.GetFullPath(folders[i])}: {text}", color);
+        }
     }
 
     private static void WriteReports(FolderOptimizationSummary summary, CliOptions cli, FolderOptimizerOptions options,
