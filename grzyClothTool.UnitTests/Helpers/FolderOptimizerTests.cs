@@ -22,6 +22,47 @@ public class FolderOptimizerTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("mp_f_freemode_01^hair_001_u.ydd", true)]
+    [InlineData("mp_m_freemode_01_clothes_x_01^hair_diff_025_a_uni.ytd", true)]
+    [InlineData("mp_fm_body_hair_001.ytd", true)]
+    [InlineData("mp_f_freemode_01_mp_f_gunrunning_hair_01^jbib_000_u.ydd", false)]
+    [InlineData("mp_f_freemode_01^jbib_diff_000_a_uni.ytd", false)]
+    [InlineData("mp_f_freemode_01^berd_000_u.ydd", false)]
+    public void IsHairFile_MatchesHairComponentsAndOverlaysOnly(string name, bool expected)
+    {
+        Assert.Equal(expected, FolderOptimizer.IsHairFile(Path.Combine("stream", name)));
+    }
+
+    [Fact]
+    public async Task RunAsync_CopiesHairUnchangedUnlessIncluded()
+    {
+        var hairPath = Path.Combine(_input, "stream", "mp_f_freemode_01^hair_diff_000_a_uni.ytd");
+        WriteUncompressedYtd(hairPath, "hair_diff_000_a_uni", size: 64);
+        var originalBytes = File.ReadAllBytes(hairPath);
+        var output = Path.Combine(_root, "out");
+
+        var skipped = await new FolderOptimizer(new FolderOptimizerOptions
+        {
+            InputFolder = _input,
+            OutputFolder = output,
+            DiffuseLimit = 32
+        }).RunAsync();
+
+        Assert.Equal(1, skipped.Count(FileOutcome.Excluded));
+        Assert.Equal(originalBytes, File.ReadAllBytes(Path.Combine(output, "stream", "mp_f_freemode_01^hair_diff_000_a_uni.ytd")));
+
+        var included = await new FolderOptimizer(new FolderOptimizerOptions
+        {
+            InputFolder = _input,
+            DiffuseLimit = 32,
+            DryRun = true,
+            SkipHair = false
+        }).RunAsync();
+
+        Assert.Equal(1, included.Count(FileOutcome.Optimized));
+    }
+
     [Fact]
     public async Task RunAsync_WritesOptimizedCopyAndLeavesInputUntouched()
     {

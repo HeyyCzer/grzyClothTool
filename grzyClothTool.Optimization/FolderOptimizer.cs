@@ -22,6 +22,12 @@ public sealed record FolderOptimizerOptions
     /// <summary>Generate missing Medium/Low LODs of .ydd files with Blender + Sollumz. Null leaves models untouched.</summary>
     public LodGenerationOptions? Lods { get; init; }
 
+    /// <summary>
+    /// Copy hair files (<see cref="FolderOptimizer.IsHairFile"/>) unchanged: no texture optimization, no LODs.
+    /// Optimized hair packs crashed FiveM clients in the NVIDIA driver while switching hairstyles (barbershop).
+    /// </summary>
+    public bool SkipHair { get; init; } = true;
+
     public int GetLimit(TextureKind kind) => kind switch
     {
         TextureKind.Normal => NormalLimit,
@@ -40,6 +46,8 @@ public enum FileOutcome
     Copied,
     /// <summary>Texture file that could not be read (encrypted/corrupted); kept as-is.</summary>
     Skipped,
+    /// <summary>Texture file left out by an option (e.g. <see cref="FolderOptimizerOptions.SkipHair"/>); copied as-is.</summary>
+    Excluded,
     /// <summary>Optimizing failed; the original file was kept.</summary>
     Failed
 }
@@ -140,6 +148,12 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
         {
             CopyToOutput(path, relative);
             return new FileResult(relative, FileOutcome.Copied, [], [], original.Length, original.Length);
+        }
+
+        if (options.SkipHair && IsHairFile(path))
+        {
+            CopyToOutput(path, relative);
+            return new FileResult(relative, FileOutcome.Excluded, [], [], original.Length, original.Length);
         }
 
         GameFile loaded;
@@ -408,5 +422,19 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
     {
         var normalizedFolder = folder.TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
         return path.StartsWith(normalizedFolder, PathComparison);
+    }
+
+    /// <summary>
+    /// Hair component files ("mp_f_freemode_01^hair_001_u.ydd", "..^hair_diff_001_a_uni.ytd") and hair overlay
+    /// textures ("mp_fm_body_hair_001.ytd"). Only the part after '^' is checked for components, because DLC
+    /// collection names like "mp_f_gunrunning_hair_01^jbib_000_u.ydd" contain "hair" too.
+    /// </summary>
+    public static bool IsHairFile(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path);
+        int caret = name.LastIndexOf('^');
+        return caret >= 0
+            ? name[(caret + 1)..].StartsWith("hair_", PathComparison)
+            : name.Contains("hair", PathComparison);
     }
 }

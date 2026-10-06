@@ -17,6 +17,7 @@ internal sealed class CliOptions
     public bool Verbose { get; set; }
     /// <summary>Drawables with more High LOD triangles are listed in the review report.</summary>
     public int MaxHighTriangles { get; set; } = 15000;
+    public bool IncludeHair { get; set; }
     public bool ShowHelp { get; set; }
 
     public bool Lods { get; set; }
@@ -70,6 +71,9 @@ internal sealed class CliOptions
                     break;
                 case "--max-tris":
                     options.MaxHighTriangles = NextInt(args, ref i, arg, min: 1);
+                    break;
+                case "--include-hair":
+                    options.IncludeHair = true;
                     break;
                 case "-v" or "--verbose":
                     options.Verbose = true;
@@ -142,6 +146,7 @@ internal sealed class CliOptions
             SpecularLimit = SpecularLimit,
             DryRun = DryRun,
             MaxParallelism = Threads,
+            SkipHair = !IncludeHair,
             Lods = Lods ? ToLodOptions() : null
         };
     }

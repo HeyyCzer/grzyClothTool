@@ -27,6 +27,8 @@ internal static class Program
               --dry-run          Only list what would change; write nothing
           -j, --threads <n>      Parallel files (default: CPU cores - 1)
               --max-tris <n>     Report clothes whose High LOD has more triangles (default: 15000)
+              --include-hair     Also optimize hair (^hair_*, *hair* overlays). By default hair files are copied
+                                 unchanged: optimized hair crashed FiveM clients (NVIDIA driver) in the barbershop
           -v, --verbose          List every texture change
               --no-menu          With only a folder given, run with the defaults instead of asking
           -h, --help             Show this help
@@ -145,6 +147,7 @@ internal static class Program
         Console.WriteLine($"Input:   {Path.GetFullPath(options.InputFolder)}");
         Console.WriteLine(options.OutputFolder == null ? "Output:  in place" : $"Output:  {Path.GetFullPath(options.OutputFolder)}");
         Console.WriteLine($"Limits:  diffuse {options.DiffuseLimit}px, normal {options.NormalLimit}px, specular {options.SpecularLimit}px");
+        Console.WriteLine(options.SkipHair ? "Hair:    kept as-is (--include-hair to optimize)" : "Hair:    optimized");
         if (options.Lods is { } lods)
         {
             var sollumz = lods.Sollumz == SollumzSource.Installed ? "installed add-on" : lods.SollumzFolder;
@@ -241,6 +244,7 @@ internal static class Program
             new("Max normal", $"{options.NormalLimit}px"),
             new("Max specular", $"{options.SpecularLimit}px"),
             new("Max High tris", cli.MaxHighTriangles.ToString()),
+            new("Hair", options.SkipHair ? "kept as-is" : "optimized"),
             new("Threads", options.MaxParallelism.ToString())
         };
 
@@ -297,7 +301,7 @@ internal static class Program
     private static void PrintResult(FileResult result, int current, int total, bool verbose)
     {
         // Plain copies and untouched files only clutter the output.
-        if (result.Outcome is FileOutcome.Copied or FileOutcome.Unchanged && result.Notes.Count == 0)
+        if (result.Outcome is FileOutcome.Copied or FileOutcome.Unchanged or FileOutcome.Excluded && result.Notes.Count == 0)
         {
             if (current % 200 == 0)
             {
@@ -358,6 +362,10 @@ internal static class Program
         }
         Console.WriteLine($"  Already fine:       {summary.Count(FileOutcome.Unchanged)} texture file(s)");
         Console.WriteLine($"  Other files copied: {summary.Count(FileOutcome.Copied)}");
+        if (summary.Count(FileOutcome.Excluded) > 0)
+        {
+            Console.WriteLine($"  Hair (kept as-is):  {summary.Count(FileOutcome.Excluded)}");
+        }
         if (summary.Count(FileOutcome.Skipped) > 0)
         {
             WriteLine($"  Unreadable (kept):  {summary.Count(FileOutcome.Skipped)}", ConsoleColor.Yellow);

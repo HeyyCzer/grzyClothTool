@@ -116,6 +116,7 @@ public static class OptimizationReport
         sb.AppendLine($"  LODs generated:     {summary.LodsGenerated}{(options.DryRun ? " (planned)" : "")}");
         sb.AppendLine($"  Already fine:       {summary.Count(FileOutcome.Unchanged)} texture file(s)");
         sb.AppendLine($"  Other files copied: {summary.Count(FileOutcome.Copied)}");
+        sb.AppendLine($"  Hair (kept as-is):  {summary.Count(FileOutcome.Excluded)}");
         sb.AppendLine($"  Unreadable (kept):  {summary.Count(FileOutcome.Skipped)}");
         sb.AppendLine($"  Failed (kept):      {summary.Count(FileOutcome.Failed)}");
         if (!options.DryRun)
