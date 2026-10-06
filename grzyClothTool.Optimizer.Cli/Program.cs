@@ -28,8 +28,7 @@ internal static class Program
               --dry-run          Only list what would change; write nothing
           -j, --threads <n>      Parallel files (default: CPU cores - 1)
               --max-tris <n>     Report clothes whose High LOD has more triangles (default: 15000)
-              --include-hair     Also optimize hair (^hair_*, *hair* overlays). By default hair files are copied
-                                 unchanged: optimized hair crashed FiveM clients (NVIDIA driver) in the barbershop
+              --include-hair     Also optimize hair (by default hair is copied unchanged)
           -v, --verbose          List every texture change
               --no-menu          With only a folder given, run with the defaults instead of asking
           -h, --help             Show this help
@@ -347,6 +346,15 @@ internal static class Program
     }
 
     private static void PrintResult(FileResult result, int current, int total, bool verbose)
+    {
+        // Files finish in parallel: keep the lines of one file together (WriteLine takes the same lock again).
+        lock (ConsoleLock)
+        {
+            PrintResultLines(result, current, total, verbose);
+        }
+    }
+
+    private static void PrintResultLines(FileResult result, int current, int total, bool verbose)
     {
         // Plain copies and untouched files only clutter the output.
         if (result.Outcome is FileOutcome.Copied or FileOutcome.Unchanged or FileOutcome.Excluded && result.Notes.Count == 0)

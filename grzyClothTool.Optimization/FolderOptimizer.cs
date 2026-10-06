@@ -1,4 +1,6 @@
 using CodeWalker.GameFiles;
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 using grzyClothTool.Optimization.Lods;
 
 namespace grzyClothTool.Optimization;
@@ -23,7 +25,9 @@ public sealed record FolderOptimizerOptions
     public LodGenerationOptions? Lods { get; init; }
 
     /// <summary>
-    /// Copy hair files (<see cref="FolderOptimizer.IsHairFile"/>) unchanged: no texture optimization, no LODs.
+    /// Copy hair unchanged: no texture optimization, no LODs. Hair is a file named like hair
+    /// (<see cref="FolderOptimizer.IsHairFile"/>), a .ydd holding a hair model in any slot
+    /// (<see cref="FolderOptimizer.IsHairModel"/>) and the .ytd files of that model.
     /// Optimized hair packs crashed FiveM clients in the NVIDIA driver while switching hairstyles (barbershop).
     /// </summary>
     public bool SkipHair { get; init; } = true;
@@ -98,6 +102,24 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
     private readonly string _input = Path.GetFullPath(options.InputFolder);
     private readonly string? _output = options.OutputFolder == null ? null : Path.GetFullPath(options.OutputFolder);
 
+    /// <summary><see cref="DrawableKey"/> of the .ydd files excluded as hair by their content.</summary>
+    private readonly ConcurrentDictionary<string, byte> _hairDrawables = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Ped hair shaders; GTA's own hair uses ped_hair_cutout_alpha and ped_hair_spiked.</summary>
+    private static readonly HashSet<uint> HairShaders =
+    [
+        .. new[]
+        {
+            "ped_hair_cutout_alpha", "ped_hair_cutout_alpha_cloth", "ped_hair_cutout_alpha_mask",
+            "ped_hair_spiked", "ped_hair_spiked_enveff", "ped_hair_spiked_mask", "ped_hair_spiked_noalpha"
+        }.Select(JenkHash.GenHash)
+    ];
+
+    // "mp_f_freemode_01^berd_002_u" (model) and "mp_f_freemode_01^berd_diff_002_a_uni" (its textures);
+    // props: "p_head_000" and "p_head_diff_000_a".
+    private static readonly Regex ModelName = new(@"^(?<prefix>.*?)(?<component>[a-z]+)_(?<id>\d{3})(_[a-z])?$", RegexOptions.IgnoreCase);
+    private static readonly Regex TextureName = new(@"^(?<prefix>.*?)(?<component>[a-z]+)_diff_(?<id>\d{3})(_|$)", RegexOptions.IgnoreCase);
+
     public async Task<FolderOptimizationSummary> RunAsync(IProgress<FileResult>? progress = null, CancellationToken cancellationToken = default)
     {
         if (!Directory.Exists(_input))
@@ -124,15 +146,20 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
 
         await using var lods = options.Lods == null ? null : new LodGenerator(options.Lods);
 
-        await Parallel.ForEachAsync(files, parallelOptions, async (path, token) =>
+        // .ytd files run after everything else: a .ydd found to be hair by its content (SkipHair) excludes the
+        // texture dictionaries of the same drawable, which must be known before those are processed.
+        foreach (var phase in files.GroupBy(IsYtd).OrderBy(g => g.Key))
         {
-            var result = await ProcessFileAsync(path, lods, token);
-            lock (results)
+            await Parallel.ForEachAsync(phase, parallelOptions, async (path, token) =>
             {
-                results.Add(result);
-            }
-            progress?.Report(result);
-        });
+                var result = await ProcessFileAsync(path, lods, token);
+                lock (results)
+                {
+                    results.Add(result);
+                }
+                progress?.Report(result);
+            });
+        }
 
         results.Sort((a, b) => string.Compare(a.RelativePath, b.RelativePath, PathComparison));
         return new FolderOptimizationSummary(results, DateTime.UtcNow - started) { LodVersions = lods?.Versions };
@@ -156,6 +183,12 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             return new FileResult(relative, FileOutcome.Excluded, [], [], original.Length, original.Length);
         }
 
+        if (options.SkipHair && extension == ".ytd" && DrawableKey(path) is { } textureKey && _hairDrawables.ContainsKey(textureKey))
+        {
+            CopyToOutput(path, relative);
+            return new FileResult(relative, FileOutcome.Excluded, [], ["hair textures; kept as-is"], original.Length, original.Length);
+        }
+
         GameFile loaded;
         try
         {
@@ -166,6 +199,17 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             // Encrypted or corrupted resources: keep them untouched.
             CopyToOutput(path, relative);
             return new FileResult(relative, FileOutcome.Skipped, [], [$"could not be read ({ex.Message}); kept as-is"], original.Length, original.Length);
+        }
+
+        if (options.SkipHair && loaded is YddFile hairCandidate && IsHairModel(hairCandidate))
+        {
+            if (DrawableKey(path) is { } modelKey)
+            {
+                _hairDrawables.TryAdd(modelKey, 0);
+            }
+            CopyToOutput(path, relative);
+            return new FileResult(relative, FileOutcome.Excluded, [], ["hair model; kept as-is"],
+                original.Length, original.Length);
         }
 
         var drawables = loaded is YddFile yddFile ? LodGrafter.Describe(yddFile) : null;
@@ -437,4 +481,41 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             ? name[(caret + 1)..].StartsWith("hair_", PathComparison)
             : name.Contains("hair", PathComparison);
     }
+
+    /// <summary>
+    /// A hair model in any slot: packs often reuse hair as berd/hats/etc. ("..^berd_002_u.ydd" holding the drawable
+    /// "mp_f_freemode_01^hair_005_u"). Detected by a ped_hair shader or a drawable named like a hair component.
+    /// </summary>
+    public static bool IsHairModel(YddFile ydd)
+    {
+        foreach (var drawable in ydd.Drawables ?? [])
+        {
+            // "mp_f_freemode_01^hair_005_u", or just "hair_003_u" when the creator didn't keep the prefix.
+            var name = drawable?.Name ?? "";
+            if (name[(name.LastIndexOf('^') + 1)..].StartsWith("hair_", PathComparison))
+            {
+                return true;
+            }
+            if (drawable?.ShaderGroup?.Shaders?.data_items?.Any(s => s != null && HairShaders.Contains(s.Name.Hash)) == true)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Folder + collection prefix + component + drawable id, shared by a model and its texture dictionaries
+    /// ("x^berd_002_u.ydd" and "x^berd_diff_002_a_uni.ytd"). Null for names outside that convention.
+    /// </summary>
+    public static string? DrawableKey(string path)
+    {
+        var name = Path.GetFileNameWithoutExtension(path);
+        var match = IsYtd(path) ? TextureName.Match(name) : ModelName.Match(name);
+        return match.Success
+            ? $"{Path.GetDirectoryName(Path.GetFullPath(path))}|{match.Groups["prefix"].Value}{match.Groups["component"].Value}|{match.Groups["id"].Value}"
+            : null;
+    }
+
+    private static bool IsYtd(string path) => Path.GetExtension(path).Equals(".ytd", PathComparison);
 }

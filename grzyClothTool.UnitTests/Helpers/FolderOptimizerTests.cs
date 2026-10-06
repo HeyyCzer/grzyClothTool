@@ -35,6 +35,32 @@ public class FolderOptimizerTests : IDisposable
     }
 
     [Theory]
+    [InlineData("mp_f_freemode_01^berd_002_u.ydd", "mp_f_freemode_01^berd_diff_002_a_uni.ytd", true)]
+    [InlineData("mp_f_freemode_01^berd_002_r.ydd", "mp_f_freemode_01^berd_diff_002_b_whi.ytd", true)]
+    [InlineData("mp_m_freemode_01_x_01^hats_010.ydd", "mp_m_freemode_01_x_01^hats_diff_010_a.ytd", true)]
+    [InlineData("p_head_000.ydd", "p_head_diff_000_a.ytd", true)]
+    [InlineData("mp_f_freemode_01^berd_002_u.ydd", "mp_f_freemode_01^berd_diff_003_a_uni.ytd", false)]
+    [InlineData("mp_f_freemode_01^berd_002_u.ydd", "mp_f_freemode_01^jbib_diff_002_a_uni.ytd", false)]
+    [InlineData("mp_f_freemode_01^berd_002_u.ydd", "mp_m_freemode_01^berd_diff_002_a_uni.ytd", false)]
+    public void DrawableKey_PairsAModelWithItsTextures(string model, string textures, bool expected)
+    {
+        var modelKey = FolderOptimizer.DrawableKey(Path.Combine(_input, "stream", model));
+        var textureKey = FolderOptimizer.DrawableKey(Path.Combine(_input, "stream", textures));
+
+        Assert.NotNull(modelKey);
+        Assert.NotNull(textureKey);
+        Assert.Equal(expected, string.Equals(modelKey, textureKey, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void DrawableKey_KeepsFoldersApart()
+    {
+        Assert.NotEqual(
+            FolderOptimizer.DrawableKey(Path.Combine(_input, "a", "x^berd_002_u.ydd")),
+            FolderOptimizer.DrawableKey(Path.Combine(_input, "b", "x^berd_diff_002_a_uni.ytd")));
+    }
+
+    [Theory]
     [InlineData(32, 32)]
     [InlineData(64, 16)]
     [InlineData(16, 128)]
