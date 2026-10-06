@@ -238,7 +238,7 @@ public static class TextureCodec
 
     /// <summary>
     /// Resizes <paramref name="image"/> to <paramref name="target"/> and encodes it as DDS with the target
-    /// compression and a full mip chain. The image is modified in place.
+    /// compression and <see cref="TextureInfo.MipMapCount"/> levels in total. The image is modified in place.
     /// </summary>
     public static byte[] EncodeDds(MagickImage image, TextureInfo target)
     {
@@ -247,7 +247,9 @@ public static class TextureCodec
         ResizeExact(image, target.Width, target.Height, target.Compression);
         image.Settings.SetDefine(MagickFormat.Dds, "compression", GetCompressionString(target.Compression));
         image.Settings.SetDefine(MagickFormat.Dds, "cluster-fit", true);
-        image.Settings.SetDefine(MagickFormat.Dds, "mipmaps", target.MipMapCount);
+        // "dds:mipmaps" counts the levels below the base image. Passing the total made every texture one level
+        // longer than intended, ending in 2x2/1x1 mips smaller than a DXT block.
+        image.Settings.SetDefine(MagickFormat.Dds, "mipmaps", Math.Max(0, target.MipMapCount - 1));
 
         // ToByteArray writes straight into one right-sized buffer (a growing MemoryStream allocated
         // several large-object-heap arrays per texture).

@@ -34,6 +34,23 @@ public class FolderOptimizerTests : IDisposable
         Assert.Equal(expected, FolderOptimizer.IsHairFile(Path.Combine("stream", name)));
     }
 
+    [Theory]
+    [InlineData(32, 32)]
+    [InlineData(64, 16)]
+    [InlineData(16, 128)]
+    [InlineData(8, 8)]
+    public void EncodeDds_WritesExactlyTheTargetMipChain(int width, int height)
+    {
+        using var image = new ImageMagick.MagickImage(ImageMagick.MagickColors.Red, (uint)width, (uint)height);
+        var target = new TextureInfo(width, height, TextureRules.GetExpectedMipMapCount(width, height), "D3DFMT_DXT5");
+
+        var texture = CodeWalker.Utils.DDSIO.GetTexture(TextureCodec.EncodeDds(image, target));
+
+        Assert.Equal(target.MipMapCount, texture.Levels);
+        int last = texture.Levels - 1;
+        Assert.True(Math.Min(width >> last, height >> last) >= 4, "last mip smaller than a DXT block");
+    }
+
     [Fact]
     public async Task RunAsync_CopiesHairUnchangedUnlessIncluded()
     {
@@ -89,9 +106,9 @@ public class FolderOptimizerTests : IDisposable
         Assert.Equal(32, texture.Width);
         Assert.Equal(32, texture.Height);
         Assert.Equal(TextureFormat.D3DFMT_DXT5, texture.Format);
-        // ImageMagick's "dds:mipmaps" counts levels below the base image, so the file holds one level more
-        // than MipMapCount (down to 2x2). grzyClothTool builds have always produced the same chain.
-        Assert.Equal(TextureRules.GetExpectedMipMapCount(32, 32) + 1, texture.Levels);
+        // Mip chain stops at 4x4 (smallest DXT block); 32x32 -> 32, 16, 8, 4.
+        Assert.Equal(TextureRules.GetExpectedMipMapCount(32, 32), texture.Levels);
+        Assert.Equal(4, texture.Levels);
     }
 
     [Fact]
