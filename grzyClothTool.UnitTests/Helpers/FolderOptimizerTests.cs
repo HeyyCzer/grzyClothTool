@@ -107,6 +107,27 @@ public class FolderOptimizerTests : IDisposable
     }
 
     [Fact]
+    public async Task RunAsync_HairModelInAnotherSlotExcludesItsTextures()
+    {
+        var ydd = new YddFile();
+        ydd.Load(File.ReadAllBytes(Path.Combine(FindRepoRoot(), "grzyClothTool", "Resources", "reservedDrawable.ydd")));
+        foreach (var shader in ydd.Drawables.SelectMany(d => d.ShaderGroup.Shaders.data_items))
+        {
+            shader.Name = JenkHash.GenHash("ped_hair_spiked");
+        }
+        File.WriteAllBytes(Path.Combine(_input, "x^berd_002_u.ydd"), ydd.Save());
+        WriteUncompressedYtd(Path.Combine(_input, "x^berd_diff_002_a_uni.ytd"), "berd_diff_002_a_uni", size: 64);
+        WriteUncompressedYtd(Path.Combine(_input, "x^berd_diff_003_a_uni.ytd"), "berd_diff_003_a_uni", size: 64);
+
+        var summary = await new FolderOptimizer(new FolderOptimizerOptions { InputFolder = _input, DryRun = true }).RunAsync();
+
+        var outcomes = summary.Files.ToDictionary(f => f.RelativePath, f => f.Outcome);
+        Assert.Equal(FileOutcome.Excluded, outcomes["x^berd_002_u.ydd"]);
+        Assert.Equal(FileOutcome.Excluded, outcomes["x^berd_diff_002_a_uni.ytd"]);
+        Assert.Equal(FileOutcome.Optimized, outcomes["x^berd_diff_003_a_uni.ytd"]);
+    }
+
+    [Fact]
     public async Task RunAsync_WritesOptimizedCopyAndLeavesInputUntouched()
     {
         var ytdPath = Path.Combine(_input, "stream", "sub", "jbib_diff_000_a_uni.ytd");

@@ -1,5 +1,4 @@
 using CodeWalker.GameFiles;
-using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
 using grzyClothTool.Optimization.Lods;
 
@@ -102,8 +101,14 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
     private readonly string _input = Path.GetFullPath(options.InputFolder);
     private readonly string? _output = options.OutputFolder == null ? null : Path.GetFullPath(options.OutputFolder);
 
-    /// <summary><see cref="DrawableKey"/> of the .ydd files excluded as hair by their content.</summary>
-    private readonly ConcurrentDictionary<string, byte> _hairDrawables = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>
+    /// Per .ydd path: completes with whether it is hair as soon as the file is loaded and classified (long before
+    /// its textures/LODs are done), so the .ytd files of the same drawable wait only for that, not for every .ydd.
+    /// </summary>
+    private readonly Dictionary<string, TaskCompletionSource<bool>> _hairCheckByPath = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary><see cref="DrawableKey"/> → hair checks of the .ydd files with that key (u/r variants share one).</summary>
+    private readonly Dictionary<string, List<Task<bool>>> _hairChecksByKey = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Ped hair shaders; GTA's own hair uses ped_hair_cutout_alpha and ped_hair_spiked.</summary>
     private static readonly HashSet<uint> HairShaders =
@@ -146,20 +151,40 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
 
         await using var lods = options.Lods == null ? null : new LodGenerator(options.Lods);
 
-        // .ytd files run after everything else: a .ydd found to be hair by its content (SkipHair) excludes the
-        // texture dictionaries of the same drawable, which must be known before those are processed.
-        foreach (var phase in files.GroupBy(IsYtd).OrderBy(g => g.Key))
+        // A .ydd found to be hair by its content (SkipHair) excludes the .ytd files of the same drawable. Those
+        // wait only for that classification (HairTexturesAsync), not for whole phases: a barrier between all
+        // .ydd and all .ytd files kept texture encoding from overlapping with Blender LOD generation.
+        // .ytd files are queued last, so every .ydd they can wait for has already started (no deadlock).
+        if (options.SkipHair)
         {
-            await Parallel.ForEachAsync(phase, parallelOptions, async (path, token) =>
+            foreach (var path in files.Where(p => Path.GetExtension(p).Equals(".ydd", PathComparison)))
             {
-                var result = await ProcessFileAsync(path, lods, token);
-                lock (results)
+                var check = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _hairCheckByPath[path] = check;
+                if (DrawableKey(path) is { } key)
                 {
-                    results.Add(result);
+                    (_hairChecksByKey.TryGetValue(key, out var checks) ? checks : _hairChecksByKey[key] = []).Add(check.Task);
                 }
-                progress?.Report(result);
-            });
+            }
         }
+
+        await Parallel.ForEachAsync(files.OrderBy(IsYtd), parallelOptions, async (path, token) =>
+        {
+            FileResult result;
+            try
+            {
+                result = await ProcessFileAsync(path, lods, token);
+            }
+            finally
+            {
+                ReportHairCheck(path, false); // no-op once classified; unblocks .ytd waiters on early exits
+            }
+            lock (results)
+            {
+                results.Add(result);
+            }
+            progress?.Report(result);
+        });
 
         results.Sort((a, b) => string.Compare(a.RelativePath, b.RelativePath, PathComparison));
         return new FolderOptimizationSummary(results, DateTime.UtcNow - started) { LodVersions = lods?.Versions };
@@ -183,7 +208,7 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             return new FileResult(relative, FileOutcome.Excluded, [], [], original.Length, original.Length);
         }
 
-        if (options.SkipHair && extension == ".ytd" && DrawableKey(path) is { } textureKey && _hairDrawables.ContainsKey(textureKey))
+        if (options.SkipHair && extension == ".ytd" && await HairTexturesAsync(path, cancellationToken))
         {
             CopyToOutput(path, relative);
             return new FileResult(relative, FileOutcome.Excluded, [], ["hair textures; kept as-is"], original.Length, original.Length);
@@ -201,12 +226,10 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             return new FileResult(relative, FileOutcome.Skipped, [], [$"could not be read ({ex.Message}); kept as-is"], original.Length, original.Length);
         }
 
-        if (options.SkipHair && loaded is YddFile hairCandidate && IsHairModel(hairCandidate))
+        bool isHairModel = options.SkipHair && loaded is YddFile hairCandidate && IsHairModel(hairCandidate);
+        ReportHairCheck(path, isHairModel);
+        if (isHairModel)
         {
-            if (DrawableKey(path) is { } modelKey)
-            {
-                _hairDrawables.TryAdd(modelKey, 0);
-            }
             CopyToOutput(path, relative);
             return new FileResult(relative, FileOutcome.Excluded, [], ["hair model; kept as-is"],
                 original.Length, original.Length);
@@ -248,6 +271,26 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
 
         WriteResult(path, relative, optimized);
         return new FileResult(relative, FileOutcome.Optimized, changes, notes, original.Length, optimized.Length, null, lodChanges, drawables);
+    }
+
+    private void ReportHairCheck(string path, bool isHair)
+    {
+        if (_hairCheckByPath.TryGetValue(path, out var check))
+        {
+            check.TrySetResult(isHair);
+        }
+    }
+
+    /// <summary>Whether a .ydd of the same drawable as this .ytd was classified as hair; waits for that check.</summary>
+    private async Task<bool> HairTexturesAsync(string ytdPath, CancellationToken cancellationToken)
+    {
+        if (DrawableKey(ytdPath) is not { } key || !_hairChecksByKey.TryGetValue(key, out var checks))
+        {
+            return false;
+        }
+
+        var results = await Task.WhenAll(checks).WaitAsync(cancellationToken);
+        return results.Any(isHair => isHair);
     }
 
     private static YtdFile LoadYtd(byte[] data)
