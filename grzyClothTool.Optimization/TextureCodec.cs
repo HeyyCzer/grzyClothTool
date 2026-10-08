@@ -10,11 +10,105 @@ namespace grzyClothTool.Optimization;
 /// </summary>
 public static class TextureCodec
 {
+    /// <summary>D3DFMT_A16B16G16R16 (16 bits per channel), missing from CodeWalker's <see cref="TextureFormat"/>.</summary>
+    public const TextureFormat A16B16G16R16 = (TextureFormat)36;
+
     public static TextureInfo Describe(Texture texture) =>
         new(texture.Width, texture.Height, texture.Levels, texture.Format.ToString());
 
     public static MagickImage Decode(Texture texture) =>
-        TryReadUncompressedPixels(texture) ?? new MagickImage(DDSIO.GetDDSFile(texture));
+        IsTruncated(texture)
+            ? DecodeTruncated(texture)
+            : TryReadUncompressedPixels(texture) ?? new MagickImage(DDSIO.GetDDSFile(texture));
+
+    /// <summary>
+    /// True when the data is shorter than the top mip level its size and format need. The game hands the buffer to
+    /// the GPU driver as is, and the driver reads past its end: a crash in the NVIDIA driver (memcpy) as soon as the
+    /// item is worn, or garbage when the memory after it happens to be mapped. Seen in packs as A16B16G16R16
+    /// textures with data sized for 1 byte per pixel. Only the top level is checked: mips under a 4x4 block stored
+    /// as 4 or 1 bytes instead of a whole block are common in working packs.
+    /// </summary>
+    public static bool IsTruncated(Texture texture)
+    {
+        var data = texture.Data?.FullData;
+        long needed = GetTopLevelSizeAnyFormat(texture.Format, texture.Width, texture.Height);
+        return data != null && needed > 0 && data.Length < needed;
+    }
+
+    /// <summary>
+    /// Decodes the complete rows of the top level that a truncated texture does have, stretched back to its size
+    /// (the rows the GPU read past the end were garbage anyway). A16B16G16R16 is converted here because DDSIO
+    /// cannot read it; formats that cannot be read at all become mid grey.
+    /// </summary>
+    public static MagickImage DecodeTruncated(Texture texture)
+    {
+        var data = texture.Data?.FullData ?? [];
+        int width = texture.Width;
+        int height = texture.Height;
+        MagickImage? image = null;
+
+        if (texture.Format == A16B16G16R16)
+        {
+            // Little-endian 16-bit R, G, B, A per pixel; keep the high byte of each channel.
+            int rows = Math.Min(height, data.Length / (width * 8));
+            if (rows > 0)
+            {
+                var rgba = new byte[width * rows * 4];
+                for (int i = 0; i < rgba.Length; i++)
+                {
+                    rgba[i] = data[i * 2 + 1];
+                }
+                image = new MagickImage();
+                image.ReadPixels(rgba, new PixelReadSettings((uint)width, (uint)rows, StorageType.Char, "RGBA"));
+            }
+        }
+        else if (GetLevelSize(texture.Format, width, height, out int rowPitch) > 0)
+        {
+            bool blockCompressed = IsBlockCompressed(texture.Format.ToString());
+            int rowHeight = blockCompressed ? 4 : 1;
+            int rows = Math.Min((height + rowHeight - 1) / rowHeight, data.Length / rowPitch);
+            if (rows > 0)
+            {
+                var top = new byte[rows * rowPitch];
+                Buffer.BlockCopy(data, 0, top, 0, top.Length);
+                image = Decode(new Texture
+                {
+                    Name = texture.Name,
+                    Width = (ushort)width,
+                    Height = (ushort)Math.Min(height, rows * rowHeight),
+                    Depth = 1,
+                    Levels = 1,
+                    Stride = (ushort)rowPitch,
+                    Format = texture.Format,
+                    Data = new TextureData { FullData = top },
+                });
+            }
+        }
+
+        image ??= new MagickImage(MagickColors.Gray, 4, 4);
+        image.Resize(new MagickGeometry((uint)width, (uint)height) { IgnoreAspectRatio = true });
+        return image;
+    }
+
+    /// <summary>Bytes of the top level for every format seen in GTA textures, 0 when unknown.</summary>
+    private static long GetTopLevelSizeAnyFormat(TextureFormat format, int width, int height)
+    {
+        long size = GetLevelSize(format, width, height, out _);
+        if (size > 0)
+        {
+            return size;
+        }
+
+        int bytesPerPixel = (int)format switch
+        {
+            34 or 112 or 114 => 4,  // G16R16, G16R16F, R32F
+            36 or 113 or 115 => 8,  // A16B16G16R16, A16B16G16R16F, G32R32F
+            116 => 16,              // A32B32G32R32F
+            111 => 2,               // R16F
+            _ => 0
+        };
+        return (long)Math.Max(1, width) * Math.Max(1, height) * bytesPerPixel;
+    }
 
     /// <summary>
     /// Decodes the smallest mip level that is still at least <paramref name="minSize"/> pixels on its longer

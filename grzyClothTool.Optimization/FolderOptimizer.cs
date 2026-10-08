@@ -418,7 +418,8 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             var kind = kindFromShaders(texture.Name) ?? ClassifyByName(texture.Name);
             var limit = options.GetLimit(kind);
             var before = TextureCodec.Describe(texture);
-            var target = TextureRules.ComputeTarget(before, limit);
+            bool truncated = TextureCodec.IsTruncated(texture);
+            var target = truncated ? TextureRules.ComputeRepairTarget(before, limit) : TextureRules.ComputeTarget(before, limit);
 
             if (target == null)
             {
@@ -442,6 +443,10 @@ public sealed class FolderOptimizer(FolderOptimizerOptions options)
             }
 
             var reasons = TextureRules.DescribeChanges(before, after);
+            if (truncated)
+            {
+                reasons.Insert(0, "Repair truncated data");
+            }
             if (target.Compression == TextureRules.AutoCompression && after.Compression == "D3DFMT_DXT1")
             {
                 reasons.Add("Opaque -> DXT1");

@@ -145,6 +145,24 @@ public static class TextureRules
         return new TextureInfo(width, height, expectedMipMaps, compression);
     }
 
+    /// <summary>
+    /// Target for a texture whose data is truncated (<see cref="TextureCodec.IsTruncated"/>): always re-encoded,
+    /// whatever its format, as a power of two within the limit with full mips.
+    /// </summary>
+    public static TextureInfo ComputeRepairTarget(TextureInfo current, int resolutionLimit)
+    {
+        resolutionLimit = Math.Max(resolutionLimit, MinTextureSize);
+        int width = NearestPowerOfTwo(Math.Max(current.Width, MinTextureSize));
+        int height = NearestPowerOfTwo(Math.Max(current.Height, MinTextureSize));
+        while (Math.Max(width, height) > resolutionLimit)
+        {
+            width = Math.Max(MinTextureSize, width / 2);
+            height = Math.Max(MinTextureSize, height / 2);
+        }
+
+        return new TextureInfo(width, height, GetExpectedMipMapCount(width, height), AutoCompression);
+    }
+
     /// <summary>Human readable reasons for the difference between <paramref name="current"/> and <paramref name="target"/>.</summary>
     public static List<string> DescribeChanges(TextureInfo current, TextureInfo target)
     {

@@ -262,6 +262,63 @@ public class FolderOptimizerTests : IDisposable
         Assert.Equal(expected, FolderOptimizer.ClassifyByName(name));
     }
 
+    [Fact]
+    public async Task RunAsync_RepairsTruncatedTexture()
+    {
+        // Real case (smuggler hat p_head_008): A16B16G16R16 1024² whose data is sized for 1 byte per pixel, so the
+        // GPU driver read megabytes past the buffer and crashed the game the moment the hat was worn.
+        const int size = 64;
+        var data = new byte[size * size * 4 / 3];
+        for (int i = 0; i + 8 <= data.Length; i += 8)
+        {
+            new byte[] { 0x16, 0x16, 0x1e, 0x1d, 0x3a, 0x39, 0xff, 0xff }.CopyTo(data, i);
+        }
+        var truncated = new Texture
+        {
+            Name = "croche_s",
+            NameHash = JenkHash.GenHash("croche_s"),
+            Width = size,
+            Height = size,
+            Depth = 1,
+            Levels = 7,
+            Stride = size,
+            Format = TextureCodec.A16B16G16R16,
+            Data = new TextureData { FullData = data }
+        };
+        Assert.True(TextureCodec.IsTruncated(truncated));
+        var ytdPath = Path.Combine(_input, "croche_s.ytd");
+        var ytd = new YtdFile { TextureDict = new TextureDictionary() };
+        ytd.TextureDict.BuildFromTextureList([truncated]);
+        File.WriteAllBytes(ytdPath, ytd.Save());
+
+        var summary = await new FolderOptimizer(new FolderOptimizerOptions { InputFolder = _input }).RunAsync();
+
+        var texture = ReadSingleTexture(ytdPath);
+        Assert.Equal(TextureFormat.D3DFMT_DXT1, texture.Format); // the 16-bit pixels are fully opaque
+        Assert.Equal(size, texture.Width);
+        Assert.False(TextureCodec.IsTruncated(texture));
+        var change = Assert.Single(summary.Files.SelectMany(f => f.Changes));
+        Assert.Contains("Repair truncated data", change.Reasons);
+        var pixel = TextureCodec.Decode(texture).GetPixels().GetPixel(0, 0);
+        Assert.InRange(pixel.GetChannel(2) / (double)ImageMagick.Quantum.Max, 0.18, 0.26); // blue ≈ 0x39/255
+    }
+
+    [Fact]
+    public void IsTruncated_IgnoresMipsSmallerThanABlock()
+    {
+        // Common in working packs: the 2x2 and 1x1 mips are stored as 4 and 1 bytes instead of whole DXT blocks.
+        var texture = new Texture
+        {
+            Width = 1024,
+            Height = 1024,
+            Levels = 11,
+            Format = TextureFormat.D3DFMT_DXT5,
+            Data = new TextureData { FullData = new byte[1398101] }
+        };
+
+        Assert.False(TextureCodec.IsTruncated(texture));
+    }
+
     private static void WriteUncompressedYtd(string path, string name, int size, bool opaque = false)
     {
         var pixels = new byte[size * size * 4];
