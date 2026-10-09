@@ -56,7 +56,7 @@ In the app, **View > LOD Generator** (`Views/LodGeneratorWindow`, `Helpers/LodGe
 
 ## Conventions
 
-- Releases: `./scripts/bump-version.ps1 patch|minor|major [-Push]` bumps `<FileVersion>` in `grzyClothTool.csproj` (the only version the updater reads), commits `:bookmark: vX.Y.Z` and tags. The tag push runs `.github/workflows/release.yml`, which publishes `grzyClothTool.zip` (flat, exe at root — the updater requires that name/layout) and `grzyOptimizer.zip`.
+- Releases: `./scripts/bump-version.ps1 patch|minor|major [-Push]` (macOS/Linux: `./scripts/bump-version.sh patch|minor|major [--push]`) bumps `<FileVersion>` in `grzyClothTool.csproj` (the only version the updater reads), commits `:bookmark: vX.Y.Z` and tags. The tag push runs `.github/workflows/release.yml`, which publishes `grzyClothTool.zip` (flat, exe at root — the updater requires that name/layout) and `grzyOptimizer.zip`.
 - Both updaters read the latest version from `<FileVersion>` of `grzyClothTool.csproj` on master. The CLI takes the same FileVersion at build time (property function in its csproj). `grzyOptimizer` checks at startup (skip: `--no-update` / `GRZYOPTIMIZER_SKIP_UPDATE=1`), installs with `--update` or when the interactive user accepts, by renaming installed files to `*.old` (cleaned next start) and relaunching; only single-file publishes self-update.
 - Commit messages use gitmoji prefixes (`:sparkles:`, `:bug:`, `:zap:`, …).
 - Newer code (Optimization, CLI, recent helpers) uses file-scoped namespaces, nullable enabled, and explanatory `///` comments on non-obvious behavior; older app code is block-scoped without nullable — match the file you're in.
